@@ -29,12 +29,24 @@ approval needed, no password/Duo):
   now default to the GNN; train_gpu honors `TRAIN_SCRIPT`/`TRAIN_ARGS`.
 - Budget: ~0 used so far this period (plenty; resets ~06-28).
 
-**Next decisions (open):**
-- Launch full-data GNN training on OSC (ready now, cheap).
-- Make current models OSC-ready: 04a-04d use hardcoded data paths — patch them to
-  honor `LOL_DATA_DIR` (and 04c/04d need player_game_summary / sequences pushed to
-  scratch) so we can train the transformer/player-context models on full data.
-- Then run the contribution engine (08) on a properly-trained model.
+**DONE since:** patched 04a-04d for `LOL_DATA_DIR`; pushed `player_game_summary`
+to scratch; added per-model slurm scripts (train_cpu, train_04b, train_04c) after
+hitting a `sbatch --export` multi-word word-split bug (fixed osc_submit to forward
+single-token vars only).
+
+**FULL-DATA TRAINING LAUNCHED ON OSC (2026-06-07):**
+| Model | Script | Job | Cluster | Notes |
+|------|--------|-----|---------|-------|
+| 04a snapshot LightGBM | train_cpu.slurm | 48074894 | Pitzer CPU | fold0 AUC 0.827 early; fresh model on current 478-feat data (fixes staleness) |
+| 04b causal Transformer | train_04b.slurm | 5505405 | Ascend A100 | d256/8h/6L, 20 ep |
+| 04c player-context Transformer | train_04c.slurm | 5505406 | Ascend A100 | K=20 history, 20 ep |
+| 04d minute-context | (deferred) | — | — | needs player_minute_sequences (run 03b --include-sequences) |
+| 04e equivariant GNN | train_gpu.slurm | (not yet full) | — | smoke-only so far |
+
+**Next:** monitor jobs → `sync_from_osc.sh` to pull models/reports → compare
+(AUC-by-minute, calibration ECE/Brier, early-game discrimination). Then run the
+contribution engine (08) on the best/most-relevant trained model; build 04e full
+run; consider 04d sequences + more data harvesting.
 
 ---
 
