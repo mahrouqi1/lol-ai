@@ -78,18 +78,37 @@ def ece(y, p, bins=15):
     return float(e)
 
 
+def _auc_acc(y, p):
+    auc = roc_auc_score(y, p) if pd.Series(y).nunique() == 2 else np.nan
+    acc = float(((np.asarray(p) > 0.5).astype(int) == np.asarray(y)).mean())
+    return auc, acc
+
+
 def metrics(df):
-    """df: columns minute, blue_win, pred. Returns dict of by-bucket + summary."""
+    """df: columns minute, blue_win, pred. Returns by-bucket AUC+ACC + summary.
+    Accuracy is at the 0.5 threshold (base rate ~50%), matching how the LoL/MOBA
+    papers report — for apples-to-apples comparison."""
     out = {}
     for (lo, hi), lab in zip(BUCKETS, BLABELS):
         s = df[(df.minute >= lo) & (df.minute < hi)]
-        out[f"auc_{lab}"] = roc_auc_score(s.blue_win, s.pred) if s.blue_win.nunique() == 2 and len(s) > 50 else np.nan
+        if len(s) > 50 and s.blue_win.nunique() == 2:
+            out[f"auc_{lab}"], out[f"acc_{lab}"] = _auc_acc(s.blue_win, s.pred)
+        else:
+            out[f"auc_{lab}"] = out[f"acc_{lab}"] = np.nan
     early = df[df.minute < 10]
-    out["auc_early_0_10"] = roc_auc_score(early.blue_win, early.pred) if early.blue_win.nunique() == 2 else np.nan
-    out["auc_pooled"] = roc_auc_score(df.blue_win, df.pred)
+    out["auc_early_0_10"], out["acc_early_0_10"] = _auc_acc(early.blue_win, early.pred)
+    out["auc_pooled"], out["acc_pooled"] = _auc_acc(df.blue_win, df.pred)
     out["ece"] = ece(df.blue_win.to_numpy(), df.pred.to_numpy())
     out["brier"] = brier_score_loss(df.blue_win, df.pred)
     return out
+
+
+# Pre-game = neutralize in-game state; keep draft/identity (champion, spells,
+# runes), champion-mastery, role, and (04f) player history. So 04e ≈ draft-only
+# and 04f ≈ draft + player skill/form — directly comparable to the literature's
+# draft-only (~55-57%) and player-aware (~62-90%) pre-game numbers.
+PREGAME_KEEP_NUM = {"mastery_level", "mastery_points", "days_since_last_played"}
+INGAME_NUM_IDX = [i for i, s in enumerate(m04e.NUM_SUFFIXES) if s not in PREGAME_KEEP_NUM]
 
 
 # ── Holdout = replicate the GNN/transformer split ───────────────────────────────
@@ -136,6 +155,37 @@ def predict_gnn(ckpt_path, df, device, with_context=False):
         return np.concatenate(preds)
 
 
+@torch.no_grad()
+def pregame_predict(ckpt_path, pg_df, device, with_context):
+    """One prediction per game using ONLY pre-game info (in-game numeric zeroed)."""
+    ck = torch.load(ckpt_path, map_location=device, weights_only=False); a = ck["args"]
+    if with_context:
+        model = m04f.ContextGameGNN(ck["vocabs"], K=a["k"], d=a["d"], layers=a["layers"], ctx_d=a["ctx_d"]).to(device)
+        model.load_state_dict(ck["state_dict"]); model.eval()
+        Xn, Xc = m04f.to_node_tensors(pg_df, ck["vocabs"], ck["num_mean"], ck["num_std"])
+        Xn, Xc = torch.from_numpy(Xn), torch.from_numpy(Xc)
+        Xn[:, :, INGAME_NUM_IDX] = 0.0
+        pp, gm = m04f.build_history_index(pd.read_parquet(DATA_DIR / "player_game_summary.parquet"))
+        feat, mask = m04f.precompute_game_history(pg_df["game_id"].to_numpy(), pp, gm, a["k"])
+        feat = (feat - ck["h_mean"]) / ck["h_std"]
+        H, M = torch.from_numpy(feat), torch.from_numpy(mask)
+        preds = []
+        for i in range(0, len(pg_df), 4096):
+            lg = model(Xn[i:i+4096].to(device), Xc[i:i+4096].to(device), H[i:i+4096].to(device), M[i:i+4096].to(device))
+            preds.append(torch.sigmoid(lg).cpu().numpy())
+        return np.concatenate(preds)
+    else:
+        model = m04e.EquivariantGameGNN(ck["vocabs"], d=a["d"], layers=a["layers"]).to(device)
+        model.load_state_dict(ck["state_dict"]); model.eval()
+        Xn, Xc, _ = m04e.to_tensors(pg_df, ck["vocabs"], ck["num_mean"], ck["num_std"])
+        Xn[:, :, INGAME_NUM_IDX] = 0.0
+        preds = []
+        for i in range(0, len(pg_df), 4096):
+            lg = model(Xn[i:i+4096].to(device), Xc[i:i+4096].to(device))
+            preds.append(torch.sigmoid(lg).cpu().numpy())
+        return np.concatenate(preds)
+
+
 def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     hold = holdout_games()
@@ -173,16 +223,36 @@ def main():
     d04f = base.assign(pred=p); results["04f GNN+ctx"] = metrics(d04f); preds_for_plot["04f GNN+ctx"] = d04f
     log.info("04f done")
 
-    # ── Table ────────────────────────────────────────────────────────────────
+    # ── Pre-game evaluation (draft + identity + history; in-game state zeroed) ──
+    pg = df.groupby("game_id", as_index=False).first()
+    y_pg = pg["blue_win"].to_numpy()
+    pregame = {}
+    for name, ckpt, ctx in [("04e GNN (draft-only)", MODELS / "gnn_snapshot.pt", False),
+                            ("04f GNN+ctx (draft+player history)", MODELS / "gnn_context_model.pt", True)]:
+        pp = pregame_predict(ckpt, pg, device, ctx)
+        auc, acc = _auc_acc(y_pg, pp)
+        pregame[name] = {"pregame_AUC": auc, "pregame_ACC": acc, "n_games": len(pg)}
+        log.info("pregame %s: AUC %.4f ACC %.4f", name, auc, acc)
+    pregame_tbl = pd.DataFrame(pregame).T
+
+    # ── In-game table (AUC + ACC) ──────────────────────────────────────────────
     tbl = pd.DataFrame(results).T
-    cols = [f"auc_{l}" for l in BLABELS] + ["auc_early_0_10", "auc_pooled", "ece", "brier"]
-    tbl = tbl[cols]
+    full = [f"{m}_{l}" for l in BLABELS for m in ("auc", "acc")] + \
+           ["auc_early_0_10", "acc_early_0_10", "auc_pooled", "acc_pooled", "ece", "brier"]
+    tbl = tbl[[c for c in full if c in tbl.columns]]
     tbl.to_csv(REPORTS / "model_comparison.csv")
+    focus = tbl[["acc_5-10", "acc_10-15", "acc_15-20", "acc_25+",
+                 "acc_early_0_10", "acc_pooled", "auc_pooled", "ece"]]
     with open(REPORTS / "model_comparison.md", "w") as f:
-        f.write("# Model comparison (common seed-42 holdout)\n\n```\n")
-        f.write(tbl.round(4).to_string())
-        f.write("\n```\n\nSnapshot models recomputed uniformly. 04a uses out-of-fold preds.\n")
-    log.info("\n%s", tbl.round(4).to_string())
+        f.write("# Model comparison (common seed-42 holdout)\n\n")
+        f.write("## In-game, by stage — ACCURACY (papers' metric) + pooled AUC/ECE\n\n```\n")
+        f.write(focus.round(4).to_string())
+        f.write("\n```\n\n## Pre-game (draft + identity + player history; in-game state neutralized)\n\n```\n")
+        f.write(pregame_tbl.round(4).to_string())
+        f.write("\n```\n\nSnapshot models recomputed uniformly on common holdout; 04a uses out-of-fold preds.\n")
+        f.write("Accuracy at 0.5 threshold (base rate ~50%). Full AUC+ACC by bucket in model_comparison.csv.\n")
+    log.info("\nIN-GAME (acc by stage + pooled):\n%s", focus.round(4).to_string())
+    log.info("\nPRE-GAME:\n%s", pregame_tbl.round(4).to_string())
 
     # ── Plot: AUC by minute ─────────────────────────────────────────────────
     mids = [0.5, 3, 7.5, 12.5, 17.5, 22.5, 27]
@@ -225,11 +295,14 @@ def main():
     fig.tight_layout(); fig.savefig(REPORTS / "compare_scaling_curve.png", dpi=150); plt.close(fig)
     log.info("Saved reports/compare_scaling_curve.png")
 
-    print("\n" + "=" * 78)
+    print("\n" + "=" * 88)
     print("  UNIFORM MODEL COMPARISON (common seed-42 holdout, %d games)" % len(hold))
-    print("=" * 78)
-    print(tbl.round(4).to_string())
-    print("=" * 78)
+    print("=" * 88)
+    print("IN-GAME — accuracy by stage + pooled AUC/ECE (apples-to-apples w/ papers):")
+    print(focus.round(4).to_string())
+    print("\nPRE-GAME — outcome from draft + identity + player history (in-game neutralized):")
+    print(pregame_tbl.round(4).to_string())
+    print("=" * 88)
 
 
 if __name__ == "__main__":
