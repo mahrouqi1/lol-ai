@@ -226,6 +226,8 @@ def parse_args():
     p = argparse.ArgumentParser(description="Phase 1 equivariant per-minute GNN")
     p.add_argument("--limit", type=int, default=0, help="limit #games (0=all)")
     p.add_argument("--epochs", type=int, default=15)
+    p.add_argument("--patience", type=int, default=3,
+                   help="stop after this many epochs with no val-AUC improvement (0=off)")
     p.add_argument("--batch-size", type=int, default=2048)
     p.add_argument("--d", type=int, default=96)
     p.add_argument("--layers", type=int, default=3)
@@ -271,6 +273,7 @@ def main():
 
     n = len(y_tr)
     best = {"auc": 0.0}
+    since_improve = 0
     for ep in range(1, args.epochs + 1):
         model.train()
         perm = torch.randperm(n)
@@ -286,10 +289,17 @@ def main():
                  ep, tot / n, m["auc"], m["brier"], m["ece"])
         if m["auc"] > best["auc"]:
             best = {**m, "epoch": ep}
+            since_improve = 0
             torch.save({"state_dict": model.state_dict(), "vocabs": vocabs,
                         "num_mean": num_mean, "num_std": num_std,
                         "args": vars(args), "val_metrics": m},
                        MODELS_DIR / "gnn_snapshot.pt")
+        else:
+            since_improve += 1
+            if args.patience and since_improve >= args.patience:
+                log.info("Early stop at ep %d (no val-AUC improvement for %d epochs; best ep %d AUC %.4f)",
+                         ep, args.patience, best.get("epoch", -1), best["auc"])
+                break
 
     anti = antisymmetry_check(model, Xn_va, Xc_va, device)
     log.info("Antisymmetry max|f(A,B)+f(B,A)| (logits, should be ~0): %.2e", anti)

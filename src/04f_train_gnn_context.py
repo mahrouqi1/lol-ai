@@ -276,6 +276,8 @@ def parse_args():
     p = argparse.ArgumentParser(description="Equivariant GNN + player game-history context")
     p.add_argument("--limit", type=int, default=0)
     p.add_argument("--epochs", type=int, default=15)
+    p.add_argument("--patience", type=int, default=3,
+                   help="stop after this many epochs with no val-AUC improvement (0=off)")
     p.add_argument("--batch-size", type=int, default=2048)
     p.add_argument("--d", type=int, default=128)
     p.add_argument("--layers", type=int, default=4)
@@ -368,7 +370,7 @@ def main():
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-5)
     loss_fn = nn.BCEWithLogitsLoss()
 
-    n = len(y_tr); best = {"auc": 0.0}
+    n = len(y_tr); best = {"auc": 0.0}; since_improve = 0
     for ep in range(1, args.epochs + 1):
         model.train(); perm = torch.randperm(n); tot = 0.0
         for i in range(0, n, args.batch_size):
@@ -380,10 +382,17 @@ def main():
         log.info("ep %2d | loss %.4f | val AUC %.4f Brier %.4f ECE %.4f", ep, tot / n, m["auc"], m["brier"], m["ece"])
         if m["auc"] > best["auc"]:
             best = {**m, "epoch": ep}
+            since_improve = 0
             torch.save({"state_dict": model.state_dict(), "vocabs": vocabs, "args": vars(args),
                         "num_mean": num_mean, "num_std": num_std, "h_mean": h_mean, "h_std": h_std,
                         "champ_static": champ_static, "val_metrics": m},
                        MODELS_DIR / ("gnn_static_model.pt" if args.static else "gnn_context_model.pt"))
+        else:
+            since_improve += 1
+            if args.patience and since_improve >= args.patience:
+                log.info("Early stop at ep %d (no val-AUC improvement for %d epochs; best ep %d AUC %.4f)",
+                         ep, args.patience, best.get("epoch", -1), best["auc"])
+                break
 
     anti = antisymmetry_check(model, Xn_va, Xc_va, H_va, M_va, gi_va, device)
     log.info("Antisymmetry max|f(A,B)+f(B,A)|: %.2e", anti)
