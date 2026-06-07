@@ -37,7 +37,7 @@ FORWARDED=(ALL)
 # NOTE: only forward SINGLE-TOKEN vars. Multi-word values (e.g. TRAIN_ARGS with
 # spaces) word-split through `sbatch --export` over ssh and break submission —
 # bake training args into a per-model slurm/train_<model>.slurm instead.
-for v in CONFIG SMOKE SLUG; do
+for v in CONFIG SMOKE SLUG LIMIT; do
   [ -n "${!v:-}" ] && FORWARDED+=("$v=${!v}")
 done
 EXPORT_ARG=$(IFS=,; echo "${FORWARDED[*]}")

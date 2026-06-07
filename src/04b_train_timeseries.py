@@ -87,7 +87,8 @@ from tqdm import tqdm
 PROJECT_ROOT  = Path(__file__).resolve().parent.parent
 DATA_DIR      = Path(os.environ.get("LOL_DATA_DIR", PROJECT_ROOT / "data" / "processed"))
 FEATURES_PATH = DATA_DIR / "features.parquet"
-MODELS_DIR    = PROJECT_ROOT / "models"
+MODELS_DIR    = Path(os.environ.get("LOL_MODELS_DIR", PROJECT_ROOT / "models"))
+MODELS_DIR.mkdir(parents=True, exist_ok=True)
 REPORTS_DIR   = PROJECT_ROOT / "reports"
 LOG_DIR       = PROJECT_ROOT / "logs"
 SNAPSHOT_CV   = MODELS_DIR / "lgbm_snapshot_cv.pkl"

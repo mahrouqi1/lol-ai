@@ -51,7 +51,7 @@ from sklearn.metrics import brier_score_loss, roc_auc_score
 PROJECT_ROOT  = Path(__file__).resolve().parent.parent
 DATA_DIR      = Path(__import__("os").environ.get("LOL_DATA_DIR", PROJECT_ROOT / "data" / "processed"))
 FEATURES_PATH = DATA_DIR / "features.parquet"
-MODELS_DIR    = PROJECT_ROOT / "models"
+MODELS_DIR    = Path(__import__("os").environ.get("LOL_MODELS_DIR", PROJECT_ROOT / "models"))
 REPORTS_DIR   = PROJECT_ROOT / "reports"
 LOG_DIR       = PROJECT_ROOT / "logs"
 for _d in (MODELS_DIR, REPORTS_DIR, LOG_DIR):

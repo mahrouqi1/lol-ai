@@ -22,5 +22,6 @@ export PYTHONUNBUFFERED=1
 cd /fs/ess/PAS1457/$USER/LoL_AI
 export LOL_DATA_DIR=/fs/scratch/PAS1457/$USER/LoL_AI/data/processed
 echo "==> Job $SLURM_JOB_ID on $(hostname) at $(date)"; nvidia-smi || true
-python src/04c_train_player_context.py --epochs 20 --k 20 --batch 32
+if [ -n "${LIMIT:-}" ]; then export LOL_MODELS_DIR=$PWD/models_scale/$LIMIT; mkdir -p "$LOL_MODELS_DIR"; echo "==> scaling run LIMIT=$LIMIT -> $LOL_MODELS_DIR"; fi
+python src/04c_train_player_context.py --epochs 20 --k 20 --batch 32 ${LIMIT:+--limit $LIMIT}
 echo "==> Done at $(date)"

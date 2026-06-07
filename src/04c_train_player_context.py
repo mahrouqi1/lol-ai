@@ -74,7 +74,8 @@ PROJECT_ROOT   = Path(__file__).resolve().parent.parent
 DATA_DIR       = Path(os.environ.get("LOL_DATA_DIR", PROJECT_ROOT / "data" / "processed"))
 FEATURES_PATH  = DATA_DIR / "features.parquet"
 HISTORY_PATH   = DATA_DIR / "player_game_summary.parquet"
-MODELS_DIR     = PROJECT_ROOT / "models"
+MODELS_DIR     = Path(os.environ.get("LOL_MODELS_DIR", PROJECT_ROOT / "models"))
+MODELS_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR        = PROJECT_ROOT / "logs"
 
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
