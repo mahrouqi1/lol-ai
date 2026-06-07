@@ -5,6 +5,48 @@ Cross-chat state **and** the authoritative research plan. Read the latest entry
 
 ---
 
+## 2026-06-07 — WORK DISPATCH PLAN (parallel vs series chats) + running state
+
+**This chat is PARKED to monitor running jobs** and report results. It also owns the
+data→features→models SERIES chain (below). Open new chats at `repos/LoL_AI/`.
+
+### Currently running (do not duplicate)
+- **All-elo harvest** (bg, days): CHALLENGER→IRON, `--tiers all --players-per-tier 1000`,
+  tier-tagged → `data/raw/game_source_tier.csv`. Still early (mostly apex so far).
+- **K-sweep** (OSC jobs 5506138–42): 04f history-length K∈{5,10,20,40,80}; watcher will report.
+- **Static Phase-1 comparison** (OSC job 5506190): 04f `--static` vs baseline 04f (AUC 0.837).
+- 04d cancelled; 04g dropped (minute-history ≈ game-history at huge cost).
+
+### PARALLELIZABLE — independent, spin up as SEPARATE chats (disjoint files)
+- **Chat P1 — Paper & related-work** (files: `papers/` only). Start drafting from the
+  research plan (this HANDOFF) + `reports/lit_benchmark.md` + `reports/static_context_plan.md`.
+  Fully independent of code.
+- **Chat P2 — Contribution & validation suite** (files: `src/09_*`, new validation scripts,
+  `reports/`). Uses EXISTING checkpoints (`models/gnn_snapshot.pt`, `gnn_context_model.pt`)
+  → build C.4 validation (predictive / convergent / counterfactual / axiomatic), the
+  ex-ante/ex-post gap, seeded-griefing case study. Does NOT touch `src/03*`/`src/04*`.
+
+### SERIES — one chat, strictly ordered (shares features.parquet + src/04*; do NOT parallelize)
+- **Chain D — data → features → models:**
+  1. Let harvest accumulate multi-elo + patch diversity.
+  2. Reprocess features adding **rank** (`game_meta.source_tier`) + **patch** (`game_meta.patch`)
+     + **item features** (item-build extraction from timelines, folded into `03`/`03b`).
+  3. Retrain 04a–04f on enriched/larger data.
+  4. **Patch-index** the champion static encoder (per-game patch via `game_meta`) +
+     **rank-condition** the replacement baseline.
+  5. Re-run `src/10_compare_models.py` (comparison + scaling) and `src/09` (contribution).
+  Each step depends on the prior — keep in one chat.
+
+### Coordination rules
+- File ownership: P1=`papers/`, P2=`src/09_*`+validation, Chain-D=`src/03*`/`src/04*`/`slurm/`.
+  Avoid cross-editing to prevent conflicts.
+- OSC only via `bash osc_submit.sh` (after `/osc-submit-dryrun` + confirm). Commit before submit.
+- `HANDOFF.md` is the shared state — read latest before starting; append via `/memory-snapshot`.
+- Sidecars ready for Chain D: `data/processed/game_meta.parquet` (patch+tier),
+  `data/processed/champion_static.parquet`, `data/raw/static/<patch>/` (ddragon).
+
+---
+
 ## 2026-06-07 (latest) — Phase 2 contribution engine works on trained 04e GNN
 
 [src/09_contribution_gnn.py](src/09_contribution_gnn.py): exact per-team
