@@ -13,8 +13,12 @@ data→features→models SERIES chain (below). Open new chats at `repos/LoL_AI/`
 ### Currently running (do not duplicate)
 - **All-elo harvest** (bg, days): CHALLENGER→IRON, `--tiers all --players-per-tier 1000`,
   tier-tagged → `data/raw/game_source_tier.csv`. Still early (mostly apex so far).
-- **K-sweep** (OSC jobs 5506138–42): 04f history-length K∈{5,10,20,40,80}; watcher will report.
-- **Static Phase-1 comparison** (OSC job 5506190): 04f `--static` vs baseline 04f (AUC 0.837).
+- **K-sweep** (5506138–42) ✅ DONE: 04f history length K=5/10/20/40/80 → val AUC
+  0.833/0.835/0.837/0.837/0.838. Helps with diminishing returns; plateaus ~K=20–40
+  at 130k (avg ~30 games/player); K=80 marginally best (0.838, ECE 0.009). Expect
+  to keep climbing at 1M. All peak epoch 1 → add early-stopping.
+- **Static Phase-1 comparison** (OSC job 5506190): 04f `--static` vs baseline 04f
+  (AUC 0.837); 172/172 champs matched; result pending (will land in HANDOFF/next chat).
 - 04d cancelled; 04g dropped (minute-history ≈ game-history at huge cost).
 
 ### PARALLELIZABLE — independent, spin up as SEPARATE chats (disjoint files)
