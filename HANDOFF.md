@@ -79,16 +79,17 @@ ddragon/cdn/<version>/data/.../champion.json, item.json, runesReforged.json).
 Substantial build; revisit when scaling data across many patches. See memory
 [[patch-static-context-encoder]].
 
-**FUTURE WORK — multi-ELO data (user request):** harvest beyond Challenger/GM
-(Iron→Diamond+) so the model sees the full skill spectrum. Lower tiers use the
-paginated league-v4 entries-by-tier/division endpoints (different from the apex
-challenger/GM endpoints) — adds harvester work + rank balancing (low tiers have
-far more players). Add **rank/tier as a conditioning feature** (embedding). KEY
-SYNERGY: the replacement baseline is already defined as a population expectation
-conditioned on (rank, role, patch) — but rank is ~constant today (all apex), so
-that conditioning is currently moot. Multi-ELO makes rank-conditioning real and
-important, and matchmaking's 50/50 dynamics + skill context differ by rank, so it
-materially strengthens the contribution framing. See [[lol-multi-elo-and-ssl]].
+**MULTI-ELO HARVESTING — DONE + RUNNING (2026-06-07).** 02_bulk_harvest.py now
+supports ALL tiers CHALLENGER→IRON (apex via league endpoints incl MASTER;
+standard via paginated league.entries; all return puuid). `--tiers all
+--players-per-tier 1000` launched (3 regions, balanced ~1000 players/tier). Each
+game tagged with its source tier in `data/raw/game_source_tier.csv` (approx game
+elo → future rank feature). NOTE: the pre-existing ~141k apex games are NOT in the
+tag file (treat untagged = Challenger/GM). KEY SYNERGY: the replacement baseline
+conditions on (rank, role, patch); rank was ~constant (all apex) so that was moot
+— multi-ELO makes rank-conditioning real and strengthens the contribution framing.
+Next: after harvest, extract rank (from tag file) + patch (from gameVersion) into
+features; rerun processing pipeline. See [[lol-multi-elo-and-ssl]].
 
 **FUTURE WORK — self-supervised pretrain -> finetune (user request):** SSL on the
 abundant per-minute multi-agent series + player histories (masked-feature/next-
