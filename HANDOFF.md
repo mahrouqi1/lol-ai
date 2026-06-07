@@ -36,6 +36,36 @@ AUC-by-minute + calibration on common held-out set) + scaling curve plot.
 
 **04b/04c first full runs OOM-killed; fixed with --mem (cross-project lesson).**
 
+**04b transformer was BROKEN (diverged: AUC 0.5, BCE ~7) at every scale** — fixed
+2026-06-07: per-step LR warmup+cosine, grad clip 5.0->1.0, peak lr 5e-4. Smoke
+confirms learning (AUC by min 0.54->0.88). Rerunning: full=5505526, 25k=5505527,
+50k=5505528 (broken 50k 5505491 cancelled).
+
+**HARVESTER AUDIT (02_bulk_harvest.py) + DATA-SCALING FEASIBILITY:**
+- Throughput is API-rate-limited, not code-limited. **Dev key ≈ 100 req/2min
+  GLOBAL** (multi-region threading does NOT bypass the app-wide limit), ~2 req/game
+  -> **~25 games/min ≈ 36k/day** continuous; dev keys expire every 24h (needs
+  babysitting). 133k set took ~17 calendar days intermittent.
+- **1M games: impractical on a dev key (~a month of babysat harvesting).** A
+  **production API key** (app limit ~30k req/10min) -> ~1500 games/min -> 1M in
+  ~half a day to a couple days. So scaling to 1M realistically REQUIRES applying
+  for a production key (or accept ~250-500k as a stretch on dev).
+- **Patch coverage:** current 133k already spans **6 patches** (15.24, 16.1-16.5).
+  No `patch` column in features yet — `gameVersion` is in raw match JSON. To use
+  patch as a signal we must extract it (info.gameVersion) into features.
+
+**FUTURE WORK — patch/static-context encoder (user request, keep in mind):** give
+the model a "game context" = per-PATCH static stats of all champions, items, runes,
+objectives/epic monsters, minions. Implement as token encoders (champ-token,
+item-token, rune-token, ...), ideally fusing TEXT (names/descriptions) + NUMBERS
+(base stats/scalings) per entity. Rationale: across many patches the meta shifts
+(champ/item numbers change), so a patch-conditioned static context lets one model
+generalize across patches. **Data NOT yet downloaded/processed** — source is Riot
+Data Dragon / CommunityDragon (free, no rate limit, versioned per patch:
+ddragon/cdn/<version>/data/.../champion.json, item.json, runesReforged.json).
+Substantial build; revisit when scaling data across many patches. See memory
+[[patch-static-context-encoder]].
+
 ---
 
 ## 2026-06-07 — Phase 1 GNN built + OSC fully bootstrapped
