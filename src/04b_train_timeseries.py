@@ -803,8 +803,17 @@ def main() -> None:
         model = torch.compile(model)   # type: ignore[assignment]
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=WEIGHT_DECAY)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=args.epochs, eta_min=args.lr * 0.05
+    # Per-STEP warmup + cosine: a deep transformer at full LR in epoch 1 saturates
+    # the sigmoid (logits blow up -> BCE ~7, AUC 0.5). Warmup over the first ~3% of
+    # steps fixes this; cosine decays the rest. scheduler.step() is called per batch.
+    _steps_per_epoch = max(1, len(train_loader))
+    _total_steps = args.epochs * _steps_per_epoch
+    _warmup_steps = max(50, int(0.03 * _total_steps))
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer,
+        [torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.02, total_iters=_warmup_steps),
+         torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(1, _total_steps - _warmup_steps), eta_min=args.lr * 0.05)],
+        milestones=[_warmup_steps],
     )
 
     # Gradient scaler for AMP on GPU; no-op on CPU
@@ -853,10 +862,11 @@ def main() -> None:
 
             scaler_amp.scale(loss).backward()
             scaler_amp.unscale_(optimizer)
-            nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+            nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             scaler_amp.step(optimizer)
             scaler_amp.update()
             optimizer.zero_grad(set_to_none=True)
+            scheduler.step()   # per-step (warmup+cosine)
 
             n_toks         = mask.sum().item()
             train_loss_sum += loss.item() * n_toks
@@ -903,7 +913,7 @@ def main() -> None:
         except Exception:
             tr_auc_end = val_auc_end = val_auc_m5 = val_auc_m10 = float("nan")
 
-        scheduler.step()
+        # (scheduler now steps per-batch in the train loop)
 
         train_loss_hist.append(train_loss)
         val_loss_hist.append(val_loss)

@@ -23,5 +23,5 @@ cd /fs/ess/PAS1457/$USER/LoL_AI
 export LOL_DATA_DIR=/fs/scratch/PAS1457/$USER/LoL_AI/data/processed
 echo "==> Job $SLURM_JOB_ID on $(hostname) at $(date)"; nvidia-smi || true
 if [ -n "${LIMIT:-}" ]; then export LOL_MODELS_DIR=$PWD/models_scale/$LIMIT; mkdir -p "$LOL_MODELS_DIR"; echo "==> scaling run LIMIT=$LIMIT -> $LOL_MODELS_DIR"; fi
-python src/04b_train_timeseries.py --d-model 256 --nhead 8 --num-layers 6 --epochs 20 --batch-size 64 ${LIMIT:+--limit $LIMIT}
+python src/04b_train_timeseries.py --d-model 256 --nhead 8 --num-layers 6 --epochs 20 --batch-size 64 --lr 5e-4 ${LIMIT:+--limit $LIMIT}
 echo "==> Done at $(date)"
