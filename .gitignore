@@ -24,3 +24,24 @@ build/
 # ── IDE ──
 .vscode/
 .idea/
+
+# claude-code framework
+.claude/settings.local.json
+.claude/cmd-log.txt
+.claude/aggressive-*.log
+.claude/aggressive-*.plan.txt
+.claude/skills/
+.claude/.nfs*
+.claude/scheduled_tasks.lock
+HANDOFF.md
+_artifacts/
+.olauth
+
+# generated outputs (never tracked; these flood VSCode otherwise)
+experiments/
+logs/
+data/
+results/
+*.pt
+*.pth
+.smoke/

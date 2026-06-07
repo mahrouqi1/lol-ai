@@ -1,12 +1,191 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "_comment_v": "Moderate posture, framework v0.6.",
+  "_comment_hosts": "Replace ceg-cnc197023d.coeit.osu.edu with actual workstation hostname(s) before relying on the SSH/rsync/scp allow lines. Until replaced, those commands fall through to ask, which is safe.",
   "permissions": {
     "allow": [
-      "Bash(C:/Users/mahrouqi.1/AppData/Local/anaconda3/envs/lol_shap_env/python.exe -m py_compile src/03_process_features.py)",
-      "Bash(C:/Users/mahrouqi.1/AppData/Local/anaconda3/envs/lol_shap_env/python.exe src/03_process_features.py --limit 50)",
-      "Bash(C:/Users/mahrouqi.1/AppData/Local/anaconda3/envs/lol_shap_env/python.exe -c \":*)",
-      "Bash(C:/Users/mahrouqi.1/AppData/Local/anaconda3/envs/lol_shap_env/python.exe src/04a_train_snapshot.py --folds 3 --no-retrain)",
-      "Bash(C:/Users/mahrouqi.1/AppData/Local/anaconda3/envs/lol_shap_env/python.exe src/04b_train_timeseries.py --limit 49 --epochs 3)",
-      "Bash(C:/Users/mahrouqi.1/AppData/Local/anaconda3/envs/lol_shap_env/python.exe src/03_process_features.py)"
+      "Read",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep",
+      "Bash(pytest *)",
+      "Bash(python -m pytest *)",
+      "Bash(python -m unittest *)",
+      "Bash(ruff *)",
+      "Bash(mypy *)",
+      "Bash(black *)",
+      "Bash(isort *)",
+      "Bash(pre-commit run *)",
+      "Bash(python -m * smoke)",
+      "Bash(python -m * smoke *)",
+      "Bash(python scripts/figs/*)",
+      "Bash(python -c *)",
+      "Bash(latexmk *)",
+      "Bash(pdflatex *)",
+      "Bash(bibtex *)",
+      "Bash(biber *)",
+      "Bash(tectonic *)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git stash *)",
+      "Bash(git checkout *)",
+      "Bash(git switch *)",
+      "Bash(git restore *)",
+      "Bash(git branch*)",
+      "Bash(git worktree *)",
+      "Bash(uv *)",
+      "Bash(pip install -e *)",
+      "Bash(pip show *)",
+      "Bash(pip list*)",
+      "Bash(conda env list)",
+      "Bash(conda list*)",
+      "Bash(nvidia-smi*)",
+      "Bash(htop*)",
+      "Bash(nvtop*)",
+      "Bash(free -h)",
+      "Bash(df -h*)",
+      "Bash(python -m mlflow *)",
+      "Bash(mlflow ui*)",
+      "Bash(torchrun --standalone *)",
+      "Bash(python -m torch.distributed.run *)",
+      "Bash(python -m * --train *)",
+      "Bash(ssh ceg-cnc197023d.coeit.osu.edu*)",
+      "Bash(rsync *ceg-cnc197023d.coeit.osu.edu:*)",
+      "Bash(scp *ceg-cnc197023d.coeit.osu.edu:*)",
+      "Bash(curl *github.com*)",
+      "Bash(curl *arxiv.org*)",
+      "Bash(curl *pypi.org*)",
+      "Bash(curl *.pypa.io*)",
+      "Bash(curl *.pytorch.org*)",
+      "WebFetch(domain:arxiv.org)",
+      "WebFetch(domain:openreview.net)",
+      "WebFetch(domain:proceedings.neurips.cc)",
+      "WebFetch(domain:proceedings.mlr.press)",
+      "WebFetch(domain:semanticscholar.org)",
+      "WebFetch(domain:scholar.google.com)",
+      "WebFetch(domain:doi.org)",
+      "WebFetch(domain:overleaf.com)",
+      "WebFetch(domain:code.claude.com)",
+      "WebFetch(domain:docs.python.org)",
+      "WebFetch(domain:pytorch.org)",
+      "Bash(python3 *research/bin/*.py *)",
+      "Bash(python *research/bin/*.py *)",
+      "Bash(python3 .claude/skills/research/bin/*.py *)",
+      "Bash(python .claude/skills/research/bin/*.py *)",
+      "Bash(python3 -c *)",
+      "WebSearch",
+      "WebFetch(domain:openalex.org)",
+      "WebFetch(domain:api.openalex.org)",
+      "WebFetch(domain:api.semanticscholar.org)",
+      "WebFetch(domain:api.unpaywall.org)",
+      "WebFetch(domain:api.crossref.org)",
+      "WebFetch(domain:export.arxiv.org)",
+      "WebFetch(domain:www.ncbi.nlm.nih.gov)",
+      "WebFetch(domain:pmc.ncbi.nlm.nih.gov)"
+    ],
+    "ask": [
+      "Bash(git push *)",
+      "Bash(git fetch *)",
+      "Bash(git pull *)",
+      "Bash(git rebase *)",
+      "Bash(git merge *)",
+      "Bash(git tag *)",
+      "Bash(ssh *osc.edu*)",
+      "Bash(rsync *osc.edu*)",
+      "Bash(scp *osc.edu*)",
+      "Bash(ssh *)",
+      "Bash(rsync *)",
+      "Bash(scp *)",
+      "Bash(curl *)",
+      "Bash(wget *)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./secrets/**)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Bash(sbatch *)",
+      "Bash(* sbatch *)",
+      "Bash(ssh *osc.edu*sbatch*)",
+      "Bash(ssh *.osc.edu*sbatch*)",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)",
+      "Bash(git push * --force*)",
+      "Bash(git reset --hard *)",
+      "Bash(git clean -fd*)",
+      "Bash(git clean -fx*)",
+      "Bash(rm -rf *)",
+      "Bash(rm -fr *)",
+      "Bash(sudo *)",
+      "Bash(chmod -R 777 *)",
+      "Bash(chown -R *)",
+      "Bash(dd *)",
+      "Bash(mkfs *)",
+      "Edit(.github/**)",
+      "Edit(.pre-commit-config.yaml)",
+      "Edit(.git/**)",
+      "Write(.github/**)",
+      "Write(.pre-commit-config.yaml)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/pre-bash-guard.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/post-edit-format.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.command' >> $CLAUDE_PROJECT_DIR/.claude/cmd-log.txt"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/on-stop-journal.sh"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh"
+          }
+        ]
+      }
     ]
   }
 }
