@@ -5,7 +5,26 @@ Cross-chat state **and** the authoritative research plan. Read the latest entry
 
 ---
 
-## 2026-06-07 (latest) — Phase 1 GNN built + OSC fully bootstrapped
+## 2026-06-07 (latest) — Phase 2 contribution engine works on trained 04e GNN
+
+[src/09_contribution_gnn.py](src/09_contribution_gnn.py): exact per-team
+32-coalition Shapley on the trained equivariant GNN, in win-PROB space. "Remove
+player" = swap node features to a ROLE-CONDITIONED on-manifold real replacement;
+interactions carried by message passing; other team fixed. Reuses 04e via importlib.
+- **Efficiency residual 5.2e-17** (exact — Shapley sums to v(full)-v(empty)).
+- **Convergent validity:** mean |contribution| by role = bottom 0.123 > jungle
+  0.108 > middle 0.094 > top 0.089 > utility 0.051 (carries swing win-prob most,
+  support least — matches LoL domain knowledge). Figure: reports/gnn_contribution_example.png.
+This is the paper's core method working end-to-end on a real, calibrated model.
+
+**Still to do (user wants all):** comparison harness across models (best built once
+jobs finish — recompute AUC-by-minute + calibration on a common held-out set);
+04g (minute-context GNN — heavy, mirrors 04d's lazy sequence pipeline; recommend
+deciding after seeing whether 04d minute-history beats 04c game-history / 04e).
+
+---
+
+## 2026-06-07 — Phase 1 GNN built + OSC fully bootstrapped
 
 **Phase 1 predictor** [src/04e_train_gnn.py](src/04e_train_gnn.py): equivariant
 per-minute GNN (10-node match graph). Hard symmetries verified EXACT:
