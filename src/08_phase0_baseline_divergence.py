@@ -180,19 +180,46 @@ def group_shapley(
 
 # ── Disagreement metrics ────────────────────────────────────────────────────────
 
+def _decisiveness(C: np.ndarray) -> np.ndarray:
+    """Per-row top1-minus-top2 margin: how clearly one player 'wins' the credit.
+    Near-zero for ambiguous (e.g. early-game) rows, so it down-weights noise."""
+    s = np.sort(C, axis=1)
+    return s[:, -1] - s[:, -2]
+
+
 def pairwise_disagreement(contribs: dict[str, np.ndarray]) -> pd.DataFrame:
     rows = []
     for a, b in combinations(contribs, 2):
         ca, cb = contribs[a], contribs[b]
-        flip = float((ca.argmax(1) != cb.argmax(1)).mean())
+        flips = (ca.argmax(1) != cb.argmax(1))
+        flip = float(flips.mean())
+        # Decisiveness-weighted flip: only "real" disagreements (rows where at
+        # least one baseline names a clear top contributor) count for much.
+        w = np.maximum(_decisiveness(ca), _decisiveness(cb))
+        flip_w = float((flips * w).sum() / w.sum()) if w.sum() > 0 else float("nan")
         rhos = [spearmanr(ca[i], cb[i]).statistic for i in range(len(ca))]
         rhos = [r for r in rhos if not np.isnan(r)]
         l1 = float(np.abs(ca - cb).sum(1).mean())
         rows.append({"pair": f"{a} vs {b}", "a": a, "b": b,
-                     "flip_rate": flip,
+                     "flip_rate": flip, "flip_rate_weighted": flip_w,
                      "mean_spearman": float(np.mean(rhos)) if rhos else float("nan"),
                      "mean_l1": l1})
     return pd.DataFrame(rows)
+
+
+def aggregate_per_game(contribs: dict[str, np.ndarray], meta: pd.DataFrame) -> dict[str, np.ndarray]:
+    """Integrate per-minute contributions into one (n_games, 10) per baseline by
+    summing each slot's contribution over the game's minutes. More stable than
+    per-minute argmax, and closer to 'who contributed to THIS game'."""
+    gids = meta["game_id"].to_numpy()
+    order = np.unique(gids)
+    out = {}
+    for name, C in contribs.items():
+        agg = np.zeros((len(order), 10))
+        for gi, g in enumerate(order):
+            agg[gi] = C[gids == g].sum(axis=0)
+        out[name] = agg
+    return out
 
 
 # ── Plots ───────────────────────────────────────────────────────────────────────
@@ -344,23 +371,44 @@ def main() -> None:
     out_df.to_parquet(out_path, index=False)
     log.info("Saved: %s (%d rows)", out_path, len(out_df))
 
-    disagree = pairwise_disagreement(contribs)
+    disagree = pairwise_disagreement(contribs)              # per-minute
+    pergame = aggregate_per_game(contribs, meta)
+    disagree_game = pairwise_disagreement(pergame)          # per-game integrated
     plot_money_figure(contribs, disagree, REPORTS_DIR / "phase0_baseline_divergence.png")
     plot_pairwise_heatmaps(disagree, REPORTS_DIR / "phase0_pairwise_disagreement.png")
 
+    # Minute-bucket breakdown for the headline pair (noise concentrates early).
+    mb = minute_bucket(meta["minute"].to_numpy())
+    labels = ["0-5", "5-10", "10-15", "15-20", "20-25", "25+"]
+    ca, cb = contribs["mean_bg"], contribs["cond_bg"]
+    bucket_rows = []
+    for k, lab in enumerate(labels):
+        m = mb == k
+        if m.sum() == 0:
+            continue
+        bucket_rows.append({"minute_bucket": lab, "n": int(m.sum()),
+                            "flip_rate": float((ca[m].argmax(1) != cb[m].argmax(1)).mean())})
+    bucket_df = pd.DataFrame(bucket_rows)
+
     elapsed = time.time() - t0
-    print("\n" + "=" * 70)
+    print("\n" + "=" * 78)
     print("  PHASE 0 — replacement-baseline divergence")
     print(f"  explained rows : {len(X):,}  ({edf['game_id'].nunique()} games, minute<= {args.max_minute})")
     print(f"  replacement K  : {K}   pool rows: {len(pool_X):,}")
-    print("=" * 70)
+    print("=" * 78)
+    print("PER-MINUTE disagreement:")
     print(disagree.to_string(index=False))
-    print("=" * 70)
-    key = disagree[(disagree.a == "mean_bg") & (disagree.b == "cond_bg")]
-    if len(key):
-        r = key.iloc[0]
-        print(f"  HEADLINE (mean-bg vs conditional-bg): top contributor flips "
-              f"{r.flip_rate*100:.1f}% of game-minutes; mean slot-ordering Spearman {r.mean_spearman:.2f}.")
+    print("\nPER-GAME (integrated) disagreement:")
+    print(disagree_game.to_string(index=False))
+    print("\nmean_bg vs cond_bg flip rate BY MINUTE BUCKET:")
+    print(bucket_df.to_string(index=False))
+    print("=" * 78)
+    kr = disagree[(disagree.a == "mean_bg") & (disagree.b == "cond_bg")].iloc[0]
+    kg = disagree_game[(disagree_game.a == "mean_bg") & (disagree_game.b == "cond_bg")].iloc[0]
+    print(f"  HEADLINE (mean-bg vs conditional-bg):")
+    print(f"    per-minute : top contributor flips {kr.flip_rate*100:.1f}% raw, "
+          f"{kr.flip_rate_weighted*100:.1f}% decisiveness-weighted; Spearman {kr.mean_spearman:.2f}.")
+    print(f"    per-game   : flips {kg.flip_rate*100:.1f}% of games; Spearman {kg.mean_spearman:.2f}.")
     print(f"  done in {elapsed:.1f}s")
 
 

@@ -22,19 +22,33 @@ list from `booster.feature_name()` so it explains exactly what the model expects
 Available conditioning columns: `region`, `minute` only (no patch/rank — all
 Challenger+GM). GPU torch IS installed (2.5.1+cu121) despite env.yml's CPU pin.
 
-**First result (SMOKE, 149 rows, K=12 — noisy, not final):** top contributor
-flips **37.6%** of game-minutes between mean-bg and conditional-bg; slot-ordering
-Spearman 0.69. Figures: `reports/phase0_baseline_divergence.png`,
-`reports/phase0_pairwise_disagreement.png`. The motivating signal is present.
+**FIRMED RESULT (200 games, 5,082 rows, K=24, pool 77.5k rows; 109s on workstation).**
+Metric refinements added: decisiveness-weighted flip-rate (down-weights ambiguous
+near-zero rows), per-game integrated attribution, minute-bucket breakdown.
+- **mean-bg vs cond-bg** (headline): top contributor flips **47.4%** per-minute
+  raw, **32.0%** decisiveness-weighted; **46.5%** of games per-game-integrated;
+  Spearman 0.64 / 0.66.
+- **Structure of disagreement** (the paper story): the off-manifold **mean** baseline
+  is the outlier — it disagrees with everything (43-51%). The two on-manifold
+  baselines (pop, cond) AGREE with each other (29% flip, Spearman 0.87-0.92) but
+  differ from mean AND from the legacy tree-path method (35% per-min / 24% per-game).
+- **Not an early-game artifact:** flip rate is 44-53% across ALL minute buckets and
+  RISES into late game (25+: 53%). Decisiveness-weighting still leaves ~1/3 of
+  *confident* attributions flipping.
+Figures: `reports/phase0_baseline_divergence.png` (scatter + flip bars),
+`reports/phase0_pairwise_disagreement.png` (Spearman/flip/L1 heatmaps).
+**Verdict: Phase 0 succeeds — the baseline choice materially changes "who was the
+best player," and the off-manifold mean baseline is the worst offender.** This is
+the empirical hook justifying the population-conditional replacement baseline.
 
 **Open / next:**
-- Scale up (full sweep → OSC Pitzer CPU; needs one-time OSC bootstrap: setup_env
-  + push processed parquet & model to scratch). Funding generous through ~06-28.
-- Metric refinement: per-minute argmax flip-rate is inflated by near-zero
-  early-game attributions — add magnitude-weighting and/or a per-game final/
-  integrated attribution, and restrict to mid/late game.
+- Optional: full 133k-game sweep → OSC Pitzer CPU (needs one-time OSC bootstrap:
+  setup_env + push parquet & model to scratch). Numbers above are already solid;
+  full sweep is for the final paper figure. Funding generous through ~06-28.
+- Phase 1: build the equivariant temporal GNN predictor (the real model).
 - Conceptual caveat to keep stating: Phase 0 is on the game-state model
-  (mediator-level) by design — it's the motivator, not the final method.
+  (mediator-level) by design — it's the motivator, not the final method. Also
+  retrain 04a on the current 478-feature parquet at some point (model is stale).
 
 ---
 
