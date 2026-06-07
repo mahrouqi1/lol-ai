@@ -36,8 +36,8 @@ export LOL_DATA_DIR=/fs/scratch/PAS1457/$USER/LoL_AI/data/processed
 echo "==> Job $SLURM_JOB_ID on $(hostname) at $(date)"
 nvidia-smi || true
 
-TRAIN_SCRIPT="${TRAIN_SCRIPT:-src/04b_train_timeseries.py}"
-TRAIN_ARGS="${TRAIN_ARGS:---d-model 256 --nhead 8 --num-layers 6 --epochs 30}"
+TRAIN_SCRIPT="${TRAIN_SCRIPT:-src/04e_train_gnn.py}"
+TRAIN_ARGS="${TRAIN_ARGS:---epochs 30 --batch-size 4096 --d 128 --layers 4}"
 echo "==> python $TRAIN_SCRIPT $TRAIN_ARGS"
 python $TRAIN_SCRIPT $TRAIN_ARGS
 

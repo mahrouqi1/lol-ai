@@ -32,7 +32,6 @@ export LOL_DATA_DIR=/fs/scratch/PAS1457/$USER/LoL_AI/data/processed
 echo "==> data dir: $LOL_DATA_DIR"
 ls -lh "$LOL_DATA_DIR" || echo "WARNING: processed data not yet pushed to scratch (see slurm/sync_to_osc.sh)"
 
-# Tiny end-to-end: quick snapshot train on a small slice (adjust flags to the script's actual API).
-python src/04b_train_timeseries.py --limit 2000 --epochs 2 || \
-  echo "NOTE: adjust the smoke command to the script's real CLI before relying on it."
+# Tiny end-to-end: equivariant GNN on a small slice (LOL_DATA_DIR-aware).
+python src/04e_train_gnn.py --limit 2000 --epochs 3
 echo "==> Smoke complete at $(date)"
