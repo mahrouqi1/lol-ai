@@ -4,6 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
+#SBATCH --mem=256G
 #SBATCH --gpus-per-node=1
 #SBATCH --time=16:00:00
 #SBATCH --output=/fs/ess/PAS1457/%u/LoL_AI/logs/%x_%j.out
