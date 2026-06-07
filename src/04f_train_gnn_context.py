@@ -188,12 +188,18 @@ class HistoryEncoderGame(nn.Module):
 
 class ContextGameGNN(nn.Module):
     """04e graph + per-node game-history context."""
-    def __init__(self, vocabs, K, n_num=32, d=128, layers=4, cat_emb=12, role_emb=12, ctx_d=48):
+    def __init__(self, vocabs, K, n_num=32, d=128, layers=4, cat_emb=12, role_emb=12, ctx_d=48, champ_static=None):
         super().__init__()
         self.cat_emb = nn.ModuleDict({suf: nn.Embedding(len(vocabs[suf]) + 1, cat_emb) for suf in CAT_SUFFIXES})
         self.role_emb = nn.Embedding(5, role_emb)
         self.hist_enc = HistoryEncoderGame(len(HIST_NUM), K, ctx_d)
-        in_dim = n_num + cat_emb * len(CAT_SUFFIXES) + role_emb + ctx_d
+        n_static = 0
+        if champ_static is not None:   # patch-aware champion static features (Phase-1 context encoder)
+            self.register_buffer("champ_static", champ_static)   # (vocab+1, n_static), indexed by champion vocab id
+            n_static = champ_static.shape[1]
+        else:
+            self.champ_static = None
+        in_dim = n_num + cat_emb * len(CAT_SUFFIXES) + role_emb + ctx_d + n_static
         self.in_proj = nn.Sequential(nn.Linear(in_dim, d), nn.ReLU(), nn.LayerNorm(d))
 
         self.msg_team = nn.ModuleList(nn.Linear(d, d) for _ in range(layers))
@@ -219,7 +225,8 @@ class ContextGameGNN(nn.Module):
         cats = [self.cat_emb[suf](Xc[:, :, ci]) for ci, suf in enumerate(CAT_SUFFIXES)]
         role = self.role_emb(self.role_idx).unsqueeze(0).expand(B, -1, -1)
         ctx = self.hist_enc(hist, hmask)
-        H = self.in_proj(torch.cat([Xn] + cats + [role, ctx], dim=-1))
+        extra = [self.champ_static[Xc[:, :, 0]]] if self.champ_static is not None else []   # champion idx is cat 0
+        H = self.in_proj(torch.cat([Xn] + cats + [role, ctx] + extra, dim=-1))
         for mt, mo, ml, up in zip(self.msg_team, self.msg_opp, self.msg_lane, self.upd):
             H = up(torch.cat([H, self._mm(mt(H), self.m_team), self._mm(mo(H), self.m_opp),
                               self._mm(ml(H), self.m_lane)], dim=-1))
@@ -275,6 +282,8 @@ def parse_args():
     p.add_argument("--ctx-d", type=int, default=48)
     p.add_argument("--k", type=int, default=20, help="history games per player")
     p.add_argument("--history-level", choices=["game", "minute"], default="game")
+    p.add_argument("--static", action="store_true",
+                   help="add patch-aware champion static features per node (Phase-1 context encoder)")
     p.add_argument("--lr", type=float, default=2e-3)
     p.add_argument("--val-frac", type=float, default=0.15)
     p.add_argument("--seed", type=int, default=42)
@@ -318,6 +327,21 @@ def main():
     flat = np.concatenate([tr[[f"{s}_{q}" for q in NUM_SUFFIXES]].to_numpy(np.float32) for s in SLOTS], 0)
     num_mean, num_std = flat.mean(0), flat.std(0) + 1e-6
 
+    # Champion static features (Phase-1 patch-context encoder), aligned to vocab.
+    champ_static = None
+    if args.static:
+        cs = pd.read_parquet(DATA_DIR / "champion_static.parquet")
+        feat_cols = [c for c in cs.columns if c not in ("champion_key", "champion_name")]
+        key2feat = {int(k): v for k, v in zip(cs["champion_key"], cs[feat_cols].to_numpy(np.float32))}
+        vmap = vocabs["champion_id"]
+        table = np.zeros((len(vmap) + 1, len(feat_cols)), dtype=np.float32)  # row 0 = pad/unknown
+        for raw_id, idx in vmap.items():
+            if int(raw_id) in key2feat:
+                table[idx] = key2feat[int(raw_id)]
+        champ_static = torch.from_numpy(table)
+        log.info("Champion static: %d/%d champs matched x %d feats",
+                 int((table.any(1)).sum()), len(vmap), len(feat_cols))
+
     # History scaler: fit on the prior-game feats actually used (train players).
     hist_concat = np.concatenate([per_player[p][1] for p in per_player], 0)
     h_mean, h_std = hist_concat.mean(0), hist_concat.std(0) + 1e-6
@@ -337,7 +361,8 @@ def main():
     Xn_va, Xc_va, H_va, M_va, gi_va, y_va = make_split(va)
     log.info("History tensors: train %s, val %s", tuple(H_tr.shape), tuple(H_va.shape))
 
-    model = ContextGameGNN(vocabs, K=args.k, d=args.d, layers=args.layers, ctx_d=args.ctx_d).to(device)
+    model = ContextGameGNN(vocabs, K=args.k, d=args.d, layers=args.layers, ctx_d=args.ctx_d,
+                           champ_static=champ_static).to(device)
     nparam = sum(p.numel() for p in model.parameters())
     log.info("Model params: %d", nparam)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-5)
@@ -357,7 +382,8 @@ def main():
             best = {**m, "epoch": ep}
             torch.save({"state_dict": model.state_dict(), "vocabs": vocabs, "args": vars(args),
                         "num_mean": num_mean, "num_std": num_std, "h_mean": h_mean, "h_std": h_std,
-                        "val_metrics": m}, MODELS_DIR / "gnn_context_model.pt")
+                        "champ_static": champ_static, "val_metrics": m},
+                       MODELS_DIR / ("gnn_static_model.pt" if args.static else "gnn_context_model.pt"))
 
     anti = antisymmetry_check(model, Xn_va, Xc_va, H_va, M_va, gi_va, device)
     log.info("Antisymmetry max|f(A,B)+f(B,A)|: %.2e", anti)
@@ -366,7 +392,7 @@ def main():
     print(f"  params {nparam:,} | K={args.k} | device {device} | {time.time()-t0:.1f}s")
     print(f"  best val: AUC {best['auc']:.4f}  Brier {best['brier']:.4f}  ECE {best['ece']:.4f}  (ep {best.get('epoch','-')})")
     print(f"  antisymmetry residual: {anti:.2e}  (hard constraint -> ~0)")
-    print(f"  saved: models/gnn_context_model.pt")
+    print(f"  saved: models/{'gnn_static_model.pt' if args.static else 'gnn_context_model.pt'}")
     print("=" * 66)
 
 

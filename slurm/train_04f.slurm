@@ -26,5 +26,5 @@ export LOL_DATA_DIR=/fs/scratch/PAS1457/$USER/LoL_AI/data/processed
 echo "==> Job $SLURM_JOB_ID on $(hostname) at $(date)"; nvidia-smi || true
 # K-sweep: history length via $K (routes models to a K-specific dir so runs don't clobber).
 if [ -n "${K:-}" ]; then export LOL_MODELS_DIR=$PWD/models_ksweep/k$K; mkdir -p "$LOL_MODELS_DIR"; echo "==> K-sweep K=$K -> $LOL_MODELS_DIR"; fi
-python src/04f_train_gnn_context.py --epochs 30 --k ${K:-20} --d 128 --layers 4 --batch-size 4096 --ctx-d 48 ${LIMIT:+--limit $LIMIT}
+python src/04f_train_gnn_context.py --epochs 30 --k ${K:-20} --d 128 --layers 4 --batch-size 4096 --ctx-d 48 ${LIMIT:+--limit $LIMIT} ${STATIC:+--static}
 echo "==> Done at $(date)"
