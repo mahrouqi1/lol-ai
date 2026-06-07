@@ -17,10 +17,24 @@ interactions carried by message passing; other team fixed. Reuses 04e via import
   support least — matches LoL domain knowledge). Figure: reports/gnn_contribution_example.png.
 This is the paper's core method working end-to-end on a real, calibrated model.
 
-**Still to do (user wants all):** comparison harness across models (best built once
-jobs finish — recompute AUC-by-minute + calibration on a common held-out set);
-04g (minute-context GNN — heavy, mirrors 04d's lazy sequence pipeline; recommend
-deciding after seeing whether 04d minute-history beats 04c game-history / 04e).
+**DATA-SCALING STUDY (2026-06-07):** to decide if harvesting more data (toward
+1M games) is worth it, reran 04b/04c/04e at 25k and 50k games (full=133k done).
+Infra: `LIMIT` env (single-token, forwarded via osc_submit) + `LOL_MODELS_DIR`
+redirect to `models_scale/<N>/` so full-data models aren't clobbered.
+Jobs (Ascend): 25k=5505488(04b)/5505489(04c)/5505490(04e);
+50k=5505491(04b)/5505492(04c)/5505493(04e). Read learning curve from job logs
+(val AUC/Brier/ECE per N) → if curves are flat by 133k, more data isn't worth it.
+
+**Full-data 04f ✅** AUC **0.837** (best so far), ECE 0.025, antisymmetry exact.
+Saved gnn_context_model.pt.
+
+**Background poller running** (task watches Ascend squeue every 3min, notifies on
+completion). Then: pull all models/logs → comparison harness (recompute
+AUC-by-minute + calibration on common held-out set) + scaling curve plot.
+
+**04g (minute-context GNN):** still gated — decide after 04d result + scaling.
+
+**04b/04c first full runs OOM-killed; fixed with --mem (cross-project lesson).**
 
 ---
 
