@@ -110,6 +110,22 @@ def metrics(df):
 PREGAME_KEEP_NUM = {"mastery_level", "mastery_points", "days_since_last_played"}
 INGAME_NUM_IDX = [i for i, s in enumerate(m04e.NUM_SUFFIXES) if s not in PREGAME_KEEP_NUM]
 
+# Literature reference baselines (for related-work comparison). metric: acc|auc.
+# 'leak' flags numbers inflated by leakage (historical win-rates / late-game).
+# Columns: game, stage, metric, value, elo, leak, source
+LITERATURE = [
+    ("LoL",   "pre-game: draft only",            "acc", "0.55-0.57", "mixed/pro", False, "TechLabs Aachen; LoLDraftAI"),
+    ("LoL",   "pre-game: draft + player winrates","acc", "0.879-0.90","mixed",     True,  "LeagueOfPredictions (GitHub)"),
+    ("LoL",   "first 10 min",                     "acc", "0.73-0.744","mixed",     False, "ML Methods for LoL Outcome; IEEE CoG'21"),
+    ("LoL",   "intermediate (~60-80% elapsed)",   "acc", "0.816",     "mixed",     False, "ML Methods for LoL Outcome (LightGBM)"),
+    ("LoL",   "pro, late / full game",            "auc", "0.95",      "pro",       False, "LoL Real-Time Result Prediction (XGBoost)"),
+    ("LoL",   "pre-game w/ player stats",         "auc", "0.97",      "mixed",     True,  "RF/LR on player stats"),
+    ("Dota2", "full game",                        "acc", "0.88-0.89", "mixed",     False, "arXiv 2106.01782 (GBM; NN/LSTM)"),
+    ("Dota2", ">20 min matches",                  "acc", "0.986",     "mixed",     True,  "ExtraTrees + hero/item emb (late-game)"),
+    ("Dota2", "draft only",                       "acc", "~0.70",     "mixed",     False, "Semenov & Romov"),
+    ("LoL",   "player action scoring (no win-AUC)","-",  "-",         "-",         False, "Action2Score, arXiv 2207.10297 (GRU; not counterfactual)"),
+]
+
 
 # ── Holdout = replicate the GNN/transformer split ───────────────────────────────
 
@@ -253,6 +269,37 @@ def main():
         f.write("Accuracy at 0.5 threshold (base rate ~50%). Full AUC+ACC by bucket in model_comparison.csv.\n")
     log.info("\nIN-GAME (acc by stage + pooled):\n%s", focus.round(4).to_string())
     log.info("\nPRE-GAME:\n%s", pregame_tbl.round(4).to_string())
+
+    # ── Literature reference baselines + related-work doc ───────────────────────
+    lit_df = pd.DataFrame(LITERATURE, columns=["game", "stage", "metric", "value", "elo", "leak", "source"])
+    r = lambda d, k: f"{d[k]:.3f}" if isinstance(d.get(k), float) and not np.isnan(d[k]) else "n/a"
+    ours = [
+        ("pre-game: draft only (04e)",          f"acc {r(pregame['04e GNN (draft-only)'],'pregame_ACC')} / auc {r(pregame['04e GNN (draft-only)'],'pregame_AUC')}"),
+        ("pre-game: draft + history (04f)",      f"acc {r(pregame['04f GNN+ctx (draft+player history)'],'pregame_ACC')} / auc {r(pregame['04f GNN+ctx (draft+player history)'],'pregame_AUC')}"),
+        ("first 10 min (04f early 0-10)",        f"acc {r(results['04f GNN+ctx'],'acc_early_0_10')} / auc {r(results['04f GNN+ctx'],'auc_early_0_10')}"),
+        ("mid 15-20 min (04f)",                  f"acc {r(results['04f GNN+ctx'],'acc_15-20')} / auc {r(results['04f GNN+ctx'],'auc_15-20')}"),
+        ("late 25+ min (04e)",                   f"acc {r(results['04e GNN'],'acc_25+')} / auc {r(results['04e GNN'],'auc_25+')}"),
+        ("pooled all-minutes (04f)",             f"acc {r(results['04f GNN+ctx'],'acc_pooled')} / auc {r(results['04f GNN+ctx'],'auc_pooled')}"),
+    ]
+    ours_df = pd.DataFrame(ours, columns=["our comparable result", "value (apex, leak-free)"])
+    with open(REPORTS / "lit_benchmark.md", "w") as f:
+        f.write("# Win-prediction: ours vs literature (related-work baseline)\n\n")
+        f.write("OURS — apex (Challenger/GM) only, leakage-free, accuracy @0.5:\n\n```\n")
+        f.write(ours_df.to_string(index=False)); f.write("\n```\n\n")
+        f.write("LITERATURE reference baselines:\n\n```\n")
+        f.write(lit_df.to_string(index=False)); f.write("\n```\n\n")
+        f.write("## Caveats for fair comparison\n")
+        f.write("1. AUC != accuracy: many papers report accuracy; compare like-for-like.\n")
+        f.write("2. Elo regime: ours is apex-only (matchmaking ~50/50 -> harder); most papers use\n"
+                "   mixed/low elo or pro (bigger skill gaps -> easier -> higher numbers).\n")
+        f.write("3. leak=True rows are inflated by historical win-rate features or late-game\n"
+                "   (>20min) snapshots; we deliberately avoid these and report calibration (ECE).\n")
+        f.write("4. Most literature stops at win-prediction; our contribution method (exact\n"
+                "   per-team Shapley + on-manifold replacement + equivariant GNN) is the novelty.\n")
+    log.info("Saved reports/lit_benchmark.md")
+    with open(REPORTS / "model_comparison.md", "a") as f:
+        f.write("\n\n## Literature reference baselines (leak=inflated by leakage)\n\n```\n")
+        f.write(lit_df.to_string(index=False)); f.write("\n```\n")
 
     # ── Plot: AUC by minute ─────────────────────────────────────────────────
     mids = [0.5, 3, 7.5, 12.5, 17.5, 22.5, 27]
