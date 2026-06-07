@@ -79,6 +79,16 @@ ddragon/cdn/<version>/data/.../champion.json, item.json, runesReforged.json).
 Substantial build; revisit when scaling data across many patches. See memory
 [[patch-static-context-encoder]].
 
+**PHASE 1 IMPLEMENTED (2026-06-07):** `src/00_fetch_static_data.py` (ddragon, all 12
+patches → data/raw/static/); `src/03c_build_static_features.py` → champion_static.parquet
+(24 numeric + 6 class tags + 13 partype). `04f --static` feeds patch-aware champion
+static features per node (→ gnn_static_model.pt, backward-compatible); antisymmetry
+preserved, 167/167 champs matched. Full comparison vs baseline 04f (AUC 0.837):
+job **5506190**. v1 = latest-patch stats (patch-agnostic; cross-patch payoff needs
+patch-indexing + multi-patch data). Next: rune/spell encoders; item encoder (needs
+timeline item-build extraction); monsters/objectives (curated table). Design doc:
+reports/static_context_plan.md.
+
 **MULTI-ELO HARVESTING — DONE + RUNNING (2026-06-07).** 02_bulk_harvest.py now
 supports ALL tiers CHALLENGER→IRON (apex via league endpoints incl MASTER;
 standard via paginated league.entries; all return puuid). `--tiers all
