@@ -42,7 +42,7 @@ single-token vars only).
 | 04f GNN + game context | 5505445 (Ascend) | ⏳ running | the model the user requested; see below |
 | 04b causal Transformer | 5505405→**5505451** | ♻ resubmitted | first run OOM-killed; +`--mem=192G` |
 | 04c player-context Transf | 5505406→**5505452** | ♻ resubmitted | first run OOM-killed; +`--mem=192G` |
-| 04d minute-context | train_04d.slurm | ⏳ pending seq build | needs sequences (building) |
+| 04d minute-context | **5505474** (Ascend) | ▶ running | sequences built (33.6M rows, 446MB) + pushed to scratch |
 
 **LESSON (candidate cross-project learning):** OSC GPU jobs with big-data
 preprocessing (StandardScaler/sequence-padding on millions of rows) OOM on the
