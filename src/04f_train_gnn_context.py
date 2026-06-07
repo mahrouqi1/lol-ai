@@ -142,6 +142,45 @@ def precompute_game_history(game_ids, per_player, game_meta, K):
     return feat, mask
 
 
+# ── Patch-aware champion static (Phase 1.5) ──────────────────────────────────────
+
+CHAMP_COLS = [f"{s}_champion_id" for s in SLOTS]   # node order == SLOTS order
+
+
+def load_static_lookup(static_path):
+    """champion_static.parquet (per patch x champion) -> (lut, feat_cols, avail_patches).
+    lut: {(patch, champion_key): np.float32[n_static]}."""
+    cs = pd.read_parquet(static_path)
+    feat_cols = [c for c in cs.columns if c not in ("patch", "champion_key", "champion_name")]
+    feats = cs[feat_cols].to_numpy(np.float32)
+    lut = {(p, int(k)): feats[i] for i, (p, k) in enumerate(zip(cs["patch"], cs["champion_key"]))}
+    return lut, feat_cols, sorted(cs["patch"].unique())
+
+
+def build_game_static(game_ids, champ_by_game, patch_map, lut, n_static, avail, fallback):
+    """(G, 10, n_static) patch-correct champion static feats per node. Games whose
+    patch lacks a static table fall back to the latest available patch; champs
+    missing for a patch fall back to the same champ on the fallback patch, else 0."""
+    G = len(game_ids)
+    S = np.zeros((G, 10, n_static), dtype=np.float32)
+    matched = 0; total = 0
+    for gi, gid in enumerate(game_ids):
+        patch = patch_map.get(gid, fallback)
+        if patch not in avail:
+            patch = fallback
+        champs = champ_by_game.get(gid)
+        if champs is None:
+            continue
+        for s in range(10):
+            ck = int(champs[s]); total += 1
+            v = lut.get((patch, ck))
+            if v is None:
+                v = lut.get((fallback, ck))
+            if v is not None:
+                S[gi, s] = v; matched += 1
+    return S, matched, total
+
+
 # ── Current-game node tensors (same as 04e) ─────────────────────────────────────
 
 def build_cat_vocabs(df):
@@ -187,18 +226,15 @@ class HistoryEncoderGame(nn.Module):
 
 
 class ContextGameGNN(nn.Module):
-    """04e graph + per-node game-history context."""
-    def __init__(self, vocabs, K, n_num=32, d=128, layers=4, cat_emb=12, role_emb=12, ctx_d=48, champ_static=None):
+    """04e graph + per-node game-history context (+ optional patch-aware champion
+    static features, passed in per (game, node) so the encoder sees the stats for
+    that game's actual patch)."""
+    def __init__(self, vocabs, K, n_num=32, d=128, layers=4, cat_emb=12, role_emb=12, ctx_d=48, n_static=0):
         super().__init__()
         self.cat_emb = nn.ModuleDict({suf: nn.Embedding(len(vocabs[suf]) + 1, cat_emb) for suf in CAT_SUFFIXES})
         self.role_emb = nn.Embedding(5, role_emb)
         self.hist_enc = HistoryEncoderGame(len(HIST_NUM), K, ctx_d)
-        n_static = 0
-        if champ_static is not None:   # patch-aware champion static features (Phase-1 context encoder)
-            self.register_buffer("champ_static", champ_static)   # (vocab+1, n_static), indexed by champion vocab id
-            n_static = champ_static.shape[1]
-        else:
-            self.champ_static = None
+        self.n_static = n_static   # patch-aware champion static features fed per node (0 = off)
         in_dim = n_num + cat_emb * len(CAT_SUFFIXES) + role_emb + ctx_d + n_static
         self.in_proj = nn.Sequential(nn.Linear(in_dim, d), nn.ReLU(), nn.LayerNorm(d))
 
@@ -220,12 +256,12 @@ class ContextGameGNN(nn.Module):
         deg = mask.sum(1, keepdim=True).clamp(min=1.0)
         return torch.einsum("ij,bjd->bid", mask, H) / deg
 
-    def forward(self, Xn, Xc, hist, hmask):
+    def forward(self, Xn, Xc, hist, hmask, static=None):
         B = Xn.shape[0]
         cats = [self.cat_emb[suf](Xc[:, :, ci]) for ci, suf in enumerate(CAT_SUFFIXES)]
         role = self.role_emb(self.role_idx).unsqueeze(0).expand(B, -1, -1)
         ctx = self.hist_enc(hist, hmask)
-        extra = [self.champ_static[Xc[:, :, 0]]] if self.champ_static is not None else []   # champion idx is cat 0
+        extra = [static] if self.n_static else []   # patch-aware champion static, per (game, node)
         H = self.in_proj(torch.cat([Xn] + cats + [role, ctx] + extra, dim=-1))
         for mt, mo, ml, up in zip(self.msg_team, self.msg_opp, self.msg_lane, self.upd):
             H = up(torch.cat([H, self._mm(mt(H), self.m_team), self._mm(mo(H), self.m_opp),
@@ -246,27 +282,30 @@ def ece(y, p, bins=15):
 
 
 @torch.no_grad()
-def evaluate(model, Xn, Xc, hist, hmask, gidx, y, device, bs=4096):
+def evaluate(model, Xn, Xc, hist, hmask, gidx, y, device, static=None, bs=4096):
     model.eval(); ps = []
     for i in range(0, len(y), bs):
         g = gidx[i:i+bs]
+        s = static[g].to(device) if static is not None else None
         logit = model(Xn[i:i+bs].to(device), Xc[i:i+bs].to(device),
-                      hist[g].to(device), hmask[g].to(device))
+                      hist[g].to(device), hmask[g].to(device), s)
         ps.append(torch.sigmoid(logit).cpu().numpy())
     p = np.concatenate(ps); yt = y.numpy()
     return {"auc": roc_auc_score(yt, p), "brier": brier_score_loss(yt, p), "ece": ece(yt, p)}
 
 
 @torch.no_grad()
-def antisymmetry_check(model, Xn, Xc, hist, hmask, gidx, device, n=256):
-    """Swap blue<->red across node features AND history; logit must negate."""
+def antisymmetry_check(model, Xn, Xc, hist, hmask, gidx, device, static=None, n=256):
+    """Swap blue<->red across node features, history AND static; logit must negate."""
     model.eval()
     swap = [5, 6, 7, 8, 9, 0, 1, 2, 3, 4]
     g = gidx[:n]
     xn, xc = Xn[:n].to(device), Xc[:n].to(device)
     h, hm = hist[g].to(device), hmask[g].to(device)
-    l1 = model(xn, xc, h, hm)
-    l2 = model(xn[:, swap], xc[:, swap], h[:, swap], hm[:, swap])
+    s = static[g].to(device) if static is not None else None
+    l1 = model(xn, xc, h, hm, s)
+    l2 = model(xn[:, swap], xc[:, swap], h[:, swap], hm[:, swap],
+               s[:, swap] if s is not None else None)
     return float((l1 + l2).abs().max())
 
 
@@ -329,20 +368,20 @@ def main():
     flat = np.concatenate([tr[[f"{s}_{q}" for q in NUM_SUFFIXES]].to_numpy(np.float32) for s in SLOTS], 0)
     num_mean, num_std = flat.mean(0), flat.std(0) + 1e-6
 
-    # Champion static features (Phase-1 patch-context encoder), aligned to vocab.
-    champ_static = None
+    # Patch-aware champion static features (Phase 1.5): each game's champions are
+    # looked up at THAT game's patch (via game_meta.parquet), so cross-patch stat
+    # drift is signal. Fed per (game, node), not gathered by champion vocab id.
+    static_lut = static_feat_cols = static_avail = static_fallback = None
+    patch_map = {}
+    n_static = 0
     if args.static:
-        cs = pd.read_parquet(DATA_DIR / "champion_static.parquet")
-        feat_cols = [c for c in cs.columns if c not in ("champion_key", "champion_name")]
-        key2feat = {int(k): v for k, v in zip(cs["champion_key"], cs[feat_cols].to_numpy(np.float32))}
-        vmap = vocabs["champion_id"]
-        table = np.zeros((len(vmap) + 1, len(feat_cols)), dtype=np.float32)  # row 0 = pad/unknown
-        for raw_id, idx in vmap.items():
-            if int(raw_id) in key2feat:
-                table[idx] = key2feat[int(raw_id)]
-        champ_static = torch.from_numpy(table)
-        log.info("Champion static: %d/%d champs matched x %d feats",
-                 int((table.any(1)).sum()), len(vmap), len(feat_cols))
+        static_lut, static_feat_cols, static_avail = load_static_lookup(DATA_DIR / "champion_static.parquet")
+        n_static = len(static_feat_cols)
+        static_fallback = max(static_avail, key=lambda p: tuple(int(x) for x in p.split(".")))
+        gm = pd.read_parquet(DATA_DIR / "game_meta.parquet", columns=["game_id", "patch"])
+        patch_map = dict(zip(gm["game_id"].astype(str), gm["patch"]))
+        log.info("Static: %d feats x %d patches %s | fallback patch %s | %d games have patch meta",
+                 n_static, len(static_avail), static_avail, static_fallback, len(patch_map))
 
     # History scaler: fit on the prior-game feats actually used (train players).
     hist_concat = np.concatenate([per_player[p][1] for p in per_player], 0)
@@ -355,16 +394,25 @@ def main():
         gidx = pd.Series(np.arange(len(uniq)), index=uniq).loc[gids].to_numpy()
         feat, mask = precompute_game_history(uniq, per_player, game_meta, args.k)
         feat = (feat - h_mean) / h_std                     # standardize history feats
+        S = None
+        if args.static:
+            champ_by_game = {str(g): r.to_numpy() for g, r in
+                             d.groupby("game_id")[CHAMP_COLS].first().iterrows()}
+            S_np, matched, total = build_game_static(
+                [str(g) for g in uniq], champ_by_game, patch_map,
+                static_lut, n_static, set(static_avail), static_fallback)
+            log.info("  static: %d/%d (game,node) champ lookups matched", matched, total)
+            S = torch.from_numpy(S_np)
         return (torch.from_numpy(Xn), torch.from_numpy(Xc),
                 torch.from_numpy(feat), torch.from_numpy(mask),
-                torch.from_numpy(gidx), torch.from_numpy(d["blue_win"].to_numpy(np.float32)))
+                torch.from_numpy(gidx), torch.from_numpy(d["blue_win"].to_numpy(np.float32)), S)
 
-    Xn_tr, Xc_tr, H_tr, M_tr, gi_tr, y_tr = make_split(tr)
-    Xn_va, Xc_va, H_va, M_va, gi_va, y_va = make_split(va)
+    Xn_tr, Xc_tr, H_tr, M_tr, gi_tr, y_tr, S_tr = make_split(tr)
+    Xn_va, Xc_va, H_va, M_va, gi_va, y_va, S_va = make_split(va)
     log.info("History tensors: train %s, val %s", tuple(H_tr.shape), tuple(H_va.shape))
 
     model = ContextGameGNN(vocabs, K=args.k, d=args.d, layers=args.layers, ctx_d=args.ctx_d,
-                           champ_static=champ_static).to(device)
+                           n_static=n_static).to(device)
     nparam = sum(p.numel() for p in model.parameters())
     log.info("Model params: %d", nparam)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-5)
@@ -375,17 +423,20 @@ def main():
         model.train(); perm = torch.randperm(n); tot = 0.0
         for i in range(0, n, args.batch_size):
             b = perm[i:i+args.batch_size]; g = gi_tr[b]
-            logit = model(Xn_tr[b].to(device), Xc_tr[b].to(device), H_tr[g].to(device), M_tr[g].to(device))
+            s = S_tr[g].to(device) if S_tr is not None else None
+            logit = model(Xn_tr[b].to(device), Xc_tr[b].to(device), H_tr[g].to(device), M_tr[g].to(device), s)
             loss = loss_fn(logit, y_tr[b].to(device))
             opt.zero_grad(); loss.backward(); opt.step(); tot += loss.item() * len(b)
-        m = evaluate(model, Xn_va, Xc_va, H_va, M_va, gi_va, y_va, device)
+        m = evaluate(model, Xn_va, Xc_va, H_va, M_va, gi_va, y_va, device, static=S_va)
         log.info("ep %2d | loss %.4f | val AUC %.4f Brier %.4f ECE %.4f", ep, tot / n, m["auc"], m["brier"], m["ece"])
         if m["auc"] > best["auc"]:
             best = {**m, "epoch": ep}
             since_improve = 0
             torch.save({"state_dict": model.state_dict(), "vocabs": vocabs, "args": vars(args),
                         "num_mean": num_mean, "num_std": num_std, "h_mean": h_mean, "h_std": h_std,
-                        "champ_static": champ_static, "val_metrics": m},
+                        "n_static": n_static, "static_feat_cols": static_feat_cols,
+                        "static_avail": static_avail, "static_fallback": static_fallback,
+                        "val_metrics": m},
                        MODELS_DIR / ("gnn_static_model.pt" if args.static else "gnn_context_model.pt"))
         else:
             since_improve += 1
@@ -394,7 +445,7 @@ def main():
                          ep, args.patience, best.get("epoch", -1), best["auc"])
                 break
 
-    anti = antisymmetry_check(model, Xn_va, Xc_va, H_va, M_va, gi_va, device)
+    anti = antisymmetry_check(model, Xn_va, Xc_va, H_va, M_va, gi_va, device, static=S_va)
     log.info("Antisymmetry max|f(A,B)+f(B,A)|: %.2e", anti)
     print("\n" + "=" * 66)
     print("  04f — equivariant GNN + game-level player context")
