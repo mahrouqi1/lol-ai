@@ -5,6 +5,39 @@ Cross-chat state **and** the authoritative research plan. Read the latest entry
 
 ---
 
+## 2026-06-07 (latest) — Phase 1 GNN built + OSC fully bootstrapped
+
+**Phase 1 predictor** [src/04e_train_gnn.py](src/04e_train_gnn.py): equivariant
+per-minute GNN (10-node match graph). Hard symmetries verified EXACT:
+within-team permutation invariance + team-swap antisymmetry (residual 0.00e+00).
+Composes with the contribution engine (remove player = swap node). Reads
+`LOL_DATA_DIR`. Smoke val AUC ~0.77-0.82 (overfits at tiny scale; needs full data).
+NOTE: model is small (217k params) and **data-movement-bound** — GPU util ~0% on
+small runs. Before big sweeps, consider pre-tensorizing to .npz on scratch; a
+single A100 is fine but the GNN itself is cheap.
+
+**OSC is fully bootstrapped and validated** (key-auth + multiplexing → only in-chat
+approval needed, no password/Duo):
+- Dirs created: `/fs/ess/PAS1457/mahrouqi1/LoL_AI/` + `/fs/scratch/PAS1457/mahrouqi1/LoL_AI/data/processed/`.
+- Code synced; `features.parquet` (2.2 GB) pushed to scratch (~100 MB/s).
+- Env overlay built (`slurm/setup_env.sh`): pytorch/2.8.0 + cuda/12.8.1 modules
+  exist on Ascend; overlay `lol_user` has lightgbm/xgboost/shap/seaborn/etc.
+- **Smoke job 5505394 on Ascend succeeded end-to-end** (~$0.03): A100, CUDA True,
+  data read from scratch, GNN trained 3 epochs, antisymmetry exact, model saved.
+- Blessed submit path works: `bash osc_submit.sh slurm/<job> <cluster>` (raw
+  `sbatch` stays deny-listed). `slurm/smoke_test.slurm` + `slurm/train_gpu.slurm`
+  now default to the GNN; train_gpu honors `TRAIN_SCRIPT`/`TRAIN_ARGS`.
+- Budget: ~0 used so far this period (plenty; resets ~06-28).
+
+**Next decisions (open):**
+- Launch full-data GNN training on OSC (ready now, cheap).
+- Make current models OSC-ready: 04a-04d use hardcoded data paths — patch them to
+  honor `LOL_DATA_DIR` (and 04c/04d need player_game_summary / sequences pushed to
+  scratch) so we can train the transformer/player-context models on full data.
+- Then run the contribution engine (08) on a properly-trained model.
+
+---
+
 ## 2026-06-07 (later) — Phase 0 implemented + first result
 
 **Built** [src/08_phase0_baseline_divergence.py](src/08_phase0_baseline_divergence.py):
