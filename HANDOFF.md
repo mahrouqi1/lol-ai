@@ -5,10 +5,122 @@ Cross-chat state **and** the authoritative research plan. Read the latest entry
 
 ---
 
+## Current state
+LoL per-game player **win-contribution** project (framework-migrated 2026-06-07).
+Lead model = **equivariant GNN + player-history context (04f)**; exact per-team
+Shapley **contribution engine (09)** works on it. Win-pred is competitive with the
+honest literature; the real targets are **early-game AUC + calibration + contribution
+validity**, not pooled AUC.
+- **Branch:** main. **Last touched:** 2026-06-07.
+- **Active chats:** this = PARKED monitor; **Chain-D (implementations)** owns
+  `src/03*`/`src/04*`/`slurm/` (LIVE); **P2 (validation)** owns `src/09_*`+validation
+  (LIVE). P1 (paper) deferred. See WORK DISPATCH PLAN below.
+- **Running:** all-elo harvest only (OSC training all complete).
+- ✅ Canonical `models/gnn_*.pt` RESTORED (2026-06-07, Chain-D): snapshot+context from
+  `models/_validated/`, and `gnn_static_model.pt` pulled fresh from OSC (patch-aware
+  full-data, AUC 0.8355). Root cause fixed: 04f now honors `LOL_MODELS_DIR` (was
+  hardcoded) — smokes redirect via `LOL_MODELS_DIR=models/_smoke`.
+
+## Pending / Next
+- **Chain-D:** (1) ✅ DONE **early-stopping** (`--patience`, default 3) for 04e/04f +
+  04f honors `LOL_MODELS_DIR`; (2) ✅ DONE patch-indexed `03c` (per-(patch,champion)
+  table) wired into `04f --static` (per-game patch lookup via `game_meta`); validated
+  at scale (5506263: 100% lookups, AUC 0.8355, antisym exact, 6min vs 25min).
+  **NEXT:** (3) rune/spell + **item** encoders (item needs timeline item-build
+  extraction); (4) rank+patch features from `game_meta` (provide rank feature to P2
+  for replacement-baseline conditioning); (5) reprocess + retrain + re-run
+  `10_compare_models.py` once harvest accumulates diversity.
+- **P2:** C.4 validation suite (axiomatic / convergent / **predictive-vs-naive-stats** /
+  counterfactual / ablation / CIs) + ex-ante/ex-post intent signal, on `models/_validated/`.
+- **Harvest:** running; consider start-offset paging for older patches (timelines ~1yr).
+- **Strategic:** 1M games needs a **production API key** (public tool required); ~250-500k
+  feasible on the personal key.
+
+## Failed approaches (don't re-discover)
+- 04b transformer @ lr 1e-3 (d256/6L) **diverges epoch 1** (sigmoid saturates, BCE~7,
+  AUC 0.5). Fix: per-STEP warmup+cosine, grad clip 1.0, lr 5e-4.
+- 04b/04c full-data **OOM** on default 8-core RAM. Fix: `#SBATCH --mem=192G`.
+- `osc_submit` forwarding multi-word `TRAIN_ARGS` via `--export` **word-splits**. Fix:
+  per-model slurm scripts; forward only single-token env vars.
+- **04d** minute-level 3-level context: ~77min/epoch, only matches 04c → not worth it;
+  **04g dropped** likewise. `AUC@end`≈1.0 is a leakage metric.
+- shap **interventional TreeExplainer fails on LightGBM categorical splits** → direct
+  group-Shapley via `booster.predict`.
+- 04e/04f peak ep1-2 then **overfit/collapse** (val AUC 0.83→0.63) → early-stopping required.
+- A `--limit` smoke writing default `LOL_MODELS_DIR` **clobbers canonical full-data models**
+  → always redirect smoke output.
+- Pooled AUC is misleading (late-game ≈ leakage); use early-game + calibration.
+
+## Recent session entries (full detail, newest at top)
+
+### 2026-06-07  Chain-D — early-stopping + patch-indexed static (implementations chat)
+**What was done:**
+- **Task 1 — early-stopping** in 04e/04f: `--patience N` (default 3) breaks the loop
+  after N epochs with no val-AUC gain. Best-val checkpoint unchanged by construction;
+  antisym exact. Cancelled wasteful job 5506190 (had overfit ep1→ep26, AUC 0.839→0.63).
+- **Bonus fix:** 04f hardcoded `MODELS_DIR=models/` (ignored `LOL_MODELS_DIR`, unlike
+  04e) → K-sweep slurm redirect silently no-op'd AND smokes clobbered canonical models.
+  Fixed to honor `LOL_MODELS_DIR`. Restored canonical models/gnn_*.pt (see Current state).
+- **Task 2 — patch-indexed champion static (Phase 1.5):** 03c rewritten to emit one row
+  per (patch, champion) from all 12 ddragon patches, z-scored with ONE globally-pooled
+  mean/std so cross-patch drift survives (per-patch z-score would erase it). 04f `--static`
+  now looks up each game's patch via `game_meta.parquet` and feeds patch-correct champion
+  stats per (game, node); static feats moved out of the model (champ_static buffer/gather)
+  into a per-game input tensor threaded through forward/evaluate/antisym; checkpoint stores
+  static feat metadata (n_static, static_feat_cols, static_avail, static_fallback). Games on
+  a patch with no ddragon dir fall back to the latest available patch.
+**Result (OSC 5506263, Ascend, 6m23s, COMPLETED):** patch-static best val **AUC 0.8355**
+(ep1), Brier 0.1661, **ECE 0.0245**; 1,118,770/1,118,770 + 197,430/197,430 (game,node)
+champ lookups matched (100%); antisym 0.00e+00; early-stop fired ep4. vs per-champ
+latest-patch static **0.8386** (5506190) vs baseline **0.8370** — all within ±0.003
+single-seed noise. **Verdict: patch-indexing NEUTRAL on current 16.x-heavy data, as
+predicted** (only ~5 champs vary in AD across 16.x); payoff is cross-patch generalization,
+gated on harvest diversity. Both early-stopping + patch-aware paths de-risked at full scale
+for the Task-6 retrain. Early-stopping cut wall-clock ~4× (6min vs 25min).
+**Commits:** 8ab5df2 (early-stop), 20b1da4 (patch-index static), 9798c4c (LOL_MODELS_DIR).
+**Sidecars on scratch:** new per-patch `champion_static.parquet` (2064 rows) + `game_meta.parquet`.
+**Next chat (Chain-D):** Task 3 (rune/spell static encoders — runes/spells already in features;
+extend 03c-style table from runesReforged.json/summoner.json) + optional champ TEXT embeddings;
+Task 4 (item modeling, heavy — timeline ITEM_PURCHASED/SOLD/UNDO/DESTROYED inventory sim →
+per-(game,minute,slot) builds → item static encoder from item.json); Task 5 (rank+patch as
+model features — coordinate with P2: Chain-D provides rank feature, P2 consumes in src/09
+replacement baseline).
+
+### 2026-06-07  setup + experiments (this chat)
+**What was done:**
+- Migrated LoL_AI into the framework; re-grounded on the research-report plan; bootstrapped + validated OSC end-to-end.
+- Built & ran on full data (OSC): Phase-0 divergence (08), equivariant GNN (04e), player-history GNN (04f), contribution engine (09); fixed 04b divergence; data-scaling study (25/50/133k); history-length K-sweep; static-context Phase 1 (00 fetch, 03c table, 03d game-meta, 04f `--static`); multi-ELO harvester (all tiers) launched; uniform comparison harness (10, accuracy + pre-game + literature).
+**What was learned:**
+- GNN family leads (ECE ~0.01; AUC ties LightGBM); player context helps early/pre-game (+4pp pregame acc); more data still helps (early game + calibration); K-history plateaus ~20-40 at 130k; static champ feats ~neutral now (gated on patch/elo diversity). Timelines retained ~1yr; 1M needs a production key.
+**Files modified (session footprint):** src/02 (multi-elo, 266Δ), 04e/04f/08/09/10 (new), 00/03c/03d (static), 04a-d (LOL_DATA_DIR/mem/warmup), slurm/*, CLAUDE.md, OSC_WORKFLOW.md, reports/{lit_benchmark,static_context_plan,model_comparison}.
+**Next chat needs to know:**
+- Read the WORK DISPATCH PLAN below; P2 + Chain-D are separate live chats with disjoint files.
+- All OSC training done; only the harvest runs. Early-stopping + smoke-output redirection are the #1 Chain-D fixes.
+- Sidecars ready: `game_meta.parquet` (patch+tier), `champion_static.parquet` (patch-indexed), `data/raw/static/`; validated models in `models/_validated/`.
+**Open questions:**
+- Does Shapley contribution beat naive stats (KDA/gold/dmg share) at predicting future wins?
+- Harvest-accumulation threshold before reprocessing features for rank+patch+items?
+- Pursue the production key (requires shipping a public per-game tool)?
+**Suggested first prompt for the next chat:** "Read HANDOFF.md; you are the validation chat — build the contribution validation suite per C.4, starting with axiomatic + convergent + predictive-vs-naive-stats on models/_validated/."
+
+---
+
 ## 2026-06-07 — WORK DISPATCH PLAN (parallel vs series chats) + running state
 
 **This chat is PARKED to monitor running jobs** and report results. It also owns the
 data→features→models SERIES chain (below). Open new chats at `repos/LoL_AI/`.
+
+> **⚠️ COORDINATION (2026-06-07, VALIDATION chat / P2): canonical GNN checkpoints
+> got clobbered by a local smoke.** Between 19:13–19:15 today `models/gnn_snapshot.pt`
+> and `models/gnn_context_model.pt` were overwritten with **limit=400 smoke models**
+> (AUC 0.739 / 0.707) — almost certainly Chain-D testing the new early-stopping code
+> locally with default `LOL_MODELS_DIR`. The full-data versions (0.835/0.838) survive
+> on OSC; I re-pulled them into **`models/_validated/`** (validation-owned, won't be
+> clobbered) and point the whole validation suite there via `--model`.
+> **ASK for Chain-D:** route local smoke/dev training output away from canonical names
+> — set `LOL_MODELS_DIR=models/_smoke` (the scaling study already uses this redirect)
+> or never let a `--limit` run write `models/gnn_*.pt`. Then re-sync the real models
+> from OSC (`bash slurm/sync_from_osc.sh`) so `models/` is trustworthy again.
 
 ### Currently running (do not duplicate)
 - **All-elo harvest** (bg, days): CHALLENGER→IRON, `--tiers all --players-per-tier 1000`,
