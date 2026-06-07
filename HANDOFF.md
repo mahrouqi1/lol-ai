@@ -17,8 +17,14 @@ data→features→models SERIES chain (below). Open new chats at `repos/LoL_AI/`
   0.833/0.835/0.837/0.837/0.838. Helps with diminishing returns; plateaus ~K=20–40
   at 130k (avg ~30 games/player); K=80 marginally best (0.838, ECE 0.009). Expect
   to keep climbing at 1M. All peak epoch 1 → add early-stopping.
-- **Static Phase-1 comparison** (OSC job 5506190): 04f `--static` vs baseline 04f
-  (AUC 0.837); 172/172 champs matched; result pending (will land in HANDOFF/next chat).
+- **Static Phase-1 comparison** (5506190) ✅ DONE: 04f `--static` best val AUC
+  **0.8386** (ep1) vs baseline 04f **0.8370** → tiny +0.0016 (champion static feats
+  ~neutral on current single-meta data, as predicted — payoff is cross-patch/cold-start,
+  gated on harvest diversity). 172/172 champs matched, antisymmetry preserved. Then
+  overfit hard (val AUC→0.63 by ep27). **All OSC training jobs now complete; only the
+  harvest runs.**
+- **EARLY-STOPPING is now a confirmed must** for 04e/04f/04f--static (they peak ep1-2
+  then collapse). Chat 1's first task.
 - 04d cancelled; 04g dropped (minute-history ≈ game-history at huge cost).
 
 ### PARALLELIZABLE — independent, spin up as SEPARATE chats (disjoint files)
