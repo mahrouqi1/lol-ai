@@ -53,7 +53,8 @@ from sklearn.model_selection import GroupKFold
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
 PROJECT_ROOT  = Path(__file__).resolve().parent.parent
-FEATURES_PATH = PROJECT_ROOT / "data" / "processed" / "features.parquet"
+DATA_DIR      = Path(os.environ.get("LOL_DATA_DIR", PROJECT_ROOT / "data" / "processed"))
+FEATURES_PATH = DATA_DIR / "features.parquet"
 MODELS_DIR    = PROJECT_ROOT / "models"
 REPORTS_DIR   = PROJECT_ROOT / "reports"
 LOG_DIR       = PROJECT_ROOT / "logs"

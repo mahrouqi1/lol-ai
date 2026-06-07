@@ -73,9 +73,10 @@ from sklearn.preprocessing import StandardScaler
 # ── Paths ──────────────────────────────────────────────────────────────────────
 
 PROJECT_ROOT     = Path(__file__).resolve().parent.parent
-FEATURES_PATH    = PROJECT_ROOT / "data" / "processed" / "features.parquet"
-SUMMARY_PATH     = PROJECT_ROOT / "data" / "processed" / "player_game_summary.parquet"
-SEQUENCES_PATH   = PROJECT_ROOT / "data" / "processed" / "player_minute_sequences.parquet"
+DATA_DIR         = Path(os.environ.get("LOL_DATA_DIR", PROJECT_ROOT / "data" / "processed"))
+FEATURES_PATH    = DATA_DIR / "features.parquet"
+SUMMARY_PATH     = DATA_DIR / "player_game_summary.parquet"
+SEQUENCES_PATH   = DATA_DIR / "player_minute_sequences.parquet"
 MODELS_DIR       = PROJECT_ROOT / "models"
 LOG_DIR          = PROJECT_ROOT / "logs"
 
