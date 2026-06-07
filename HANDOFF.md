@@ -40,8 +40,15 @@ single-token vars only).
 | 04a snapshot LightGBM | train_cpu.slurm | 48074894 | Pitzer CPU | fold0 AUC 0.827 early; fresh model on current 478-feat data (fixes staleness) |
 | 04b causal Transformer | train_04b.slurm | 5505405 | Ascend A100 | d256/8h/6L, 20 ep |
 | 04c player-context Transformer | train_04c.slurm | 5505406 | Ascend A100 | K=20 history, 20 ep |
-| 04d minute-context | (deferred) | — | — | needs player_minute_sequences (run 03b --include-sequences) |
-| 04e equivariant GNN | train_gpu.slurm | (not yet full) | — | smoke-only so far |
+| 04d minute-context | train_04d.slurm | pending seq build | Ascend | IN PROGRESS (below) |
+| 04e equivariant GNN | train_04e.slurm | 5505414 | Ascend A100 | full run, d128/4L/40ep |
+
+**04d pipeline (in progress):** 03b builds sequences from RAW JSONs (`data/raw/`,
+local only — NOT on OSC), so `player_minute_sequences.parquet` is being built on
+the workstation (`03b --include-sequences --workers 8`, ~8 GB out). Then: push to
+scratch → `bash osc_submit.sh slurm/train_04d.slurm ascend`. (If we later want to
+re-process/scale data on OSC, raw must be pushed there first — small-file transfer
+is slow; tar+push is the better route.)
 
 **Next:** monitor jobs → `sync_from_osc.sh` to pull models/reports → compare
 (AUC-by-minute, calibration ECE/Brier, early-game discrimination). Then run the
