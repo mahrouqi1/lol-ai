@@ -91,6 +91,15 @@ conditions on (rank, role, patch); rank was ~constant (all apex) so that was moo
 Next: after harvest, extract rank (from tag file) + patch (from gameVersion) into
 features; rerun processing pipeline. See [[lol-multi-elo-and-ssl]].
 
+**TODO (history-richness feature, post K-sweep):** 04f's HistoryEncoderGame uses a
+masked MEAN over valid games → it normalizes away HOW MANY games a player has.
+Add an explicit richness signal (count / log-count of valid history games, and/or
+fraction-of-K-filled) into the node embedding. Rationale (user insight): history
+availability is itself signal — confidence of the skill estimate + smurf/new-account
+vs veteran. Also the principled cold-start handle (thin history → lean on bucket
+prior). The current K-sweep is the count-agnostic baseline; rerun with richness to
+measure the delta. Expected to matter more at high K and much more at 1M scale.
+
 **FUTURE WORK — self-supervised pretrain -> finetune (user request):** SSL on the
 abundant per-minute multi-agent series + player histories (masked-feature/next-
 state modeling, contrastive same-player-across-games, masked champ/item tokens),
