@@ -66,6 +66,27 @@ ddragon/cdn/<version>/data/.../champion.json, item.json, runesReforged.json).
 Substantial build; revisit when scaling data across many patches. See memory
 [[patch-static-context-encoder]].
 
+**FUTURE WORK — multi-ELO data (user request):** harvest beyond Challenger/GM
+(Iron→Diamond+) so the model sees the full skill spectrum. Lower tiers use the
+paginated league-v4 entries-by-tier/division endpoints (different from the apex
+challenger/GM endpoints) — adds harvester work + rank balancing (low tiers have
+far more players). Add **rank/tier as a conditioning feature** (embedding). KEY
+SYNERGY: the replacement baseline is already defined as a population expectation
+conditioned on (rank, role, patch) — but rank is ~constant today (all apex), so
+that conditioning is currently moot. Multi-ELO makes rank-conditioning real and
+important, and matchmaking's 50/50 dynamics + skill context differ by rank, so it
+materially strengthens the contribution framing. See [[lol-multi-elo-and-ssl]].
+
+**FUTURE WORK — self-supervised pretrain -> finetune (user request):** SSL on the
+abundant per-minute multi-agent series + player histories (masked-feature/next-
+state modeling, contrastive same-player-across-games, masked champ/item tokens),
+pretraining the encoders (player-history encoder, GNN node encoder, patch/static
+encoders); then finetune the win-prob head on outcomes. RATIONALE: supervised win
+labels hit the ~50/50 structural ceiling (limited signal), but the minute-by-minute
+data is rich and unlabeled — SSL should yield better representations (esp. early
+game + calibration + contribution quality) than outcome-only training. Natural
+backbones to pretrain = the history encoder + the GNN. See [[lol-multi-elo-and-ssl]].
+
 ---
 
 ## 2026-06-07 — Phase 1 GNN built + OSC fully bootstrapped
