@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(C:/Users/mahrouqi.1/AppData/Local/anaconda3/envs/lol_shap_env/python.exe -m py_compile src/03_process_features.py)",
+      "Bash(C:/Users/mahrouqi.1/AppData/Local/anaconda3/envs/lol_shap_env/python.exe src/03_process_features.py --limit 50)",
+      "Bash(C:/Users/mahrouqi.1/AppData/Local/anaconda3/envs/lol_shap_env/python.exe -c \":*)",
+      "Bash(C:/Users/mahrouqi.1/AppData/Local/anaconda3/envs/lol_shap_env/python.exe src/04a_train_snapshot.py --folds 3 --no-retrain)",
+      "Bash(C:/Users/mahrouqi.1/AppData/Local/anaconda3/envs/lol_shap_env/python.exe src/04b_train_timeseries.py --limit 49 --epochs 3)",
+      "Bash(C:/Users/mahrouqi.1/AppData/Local/anaconda3/envs/lol_shap_env/python.exe src/03_process_features.py)"
+    ]
+  }
+}

@@ -1,0 +1,501 @@
+"""
+02 — Bulk Harvester
+===================
+Downloads League of Legends Match V5, Timeline, and Player Metadata (Mastery)
+across multiple regions concurrently to bypass single-region rate limits.
+
+Features
+--------
+- Multi-threaded: One thread per region (NA1, EUW1, KR).
+- Resumable: Skips matches already on disk.
+- Robust: Pauses and asks for a new API key on 403 rather than crashing.
+- Polite: Respects 429 Retry-After headers and RiotWatcher's built-in limits.
+- Context harvesting: Optionally fetches player match history for player-context
+  models (03b / 04c / 04d).
+
+Context harvesting modes
+------------------------
+--context-depth N
+    After downloading each new game, fetch the N most recent prior games for
+    every participant.  Context games are stored in separate directories:
+        data/raw/context_matches/
+        data/raw/context_timelines/
+    These are NOT added to the main training set but are indexed by 03b so
+    the player-context models can look up player histories.
+    Default: 0 (disabled)
+
+--context-pass
+    Instead of harvesting new Challenger/GM games, iterate over ALL already-
+    seen player PUUIDs and fetch their context history.  Useful to back-fill
+    history for players already in your dataset without doing a full harvest.
+    Implies --context-depth (use --context-depth to set depth, default 20).
+
+Usage
+-----
+    conda activate lol_shap_env
+
+    # Normal harvest (no context)
+    python src/02_bulk_harvest.py
+
+    # Harvest + fetch 20 context games per player
+    python src/02_bulk_harvest.py --context-depth 20
+
+    # Back-fill context for existing players only
+    python src/02_bulk_harvest.py --context-pass --context-depth 20
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import threading
+import time
+from pathlib import Path
+from typing import Optional
+
+from riotwatcher import ApiError, LolWatcher
+
+from utils import (
+    ensure_dir,
+    get_watcher,
+    handle_api_error,
+    load_api_key,
+    PROJECT_ROOT,
+)
+
+# ── Configuration ─────────────────────────────────────────────────────────────
+
+REGION_MAP = {
+    "na1": "americas",
+    "euw1": "europe",
+    "kr": "asia",
+}
+
+MATCHES_PER_SUMMONER = 100
+LEAGUES_TO_PULL = ["challenger", "grandmaster"]
+
+# ── Directories ───────────────────────────────────────────────────────────────
+
+RAW_DIR          = PROJECT_ROOT / "data" / "raw"
+MATCH_DIR        = ensure_dir(RAW_DIR / "matches")
+TIMELINE_DIR     = ensure_dir(RAW_DIR / "timelines")
+PLAYER_DIR       = ensure_dir(RAW_DIR / "players")
+CTX_MATCH_DIR    = ensure_dir(RAW_DIR / "context_matches")
+CTX_TIMELINE_DIR = ensure_dir(RAW_DIR / "context_timelines")
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+
+ensure_dir(PROJECT_ROOT / "logs")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] [%(threadName)s] %(message)s",
+    handlers=[
+        logging.FileHandler(PROJECT_ROOT / "logs" / "bulk_harvest.log"),
+        logging.StreamHandler(),
+    ],
+)
+logger = logging.getLogger(__name__)
+
+
+# ── Global State (Thread-Safe) ────────────────────────────────────────────────
+
+_API_KEY_LOCK   = threading.Lock()
+_SHARED_API_KEY: str = ""
+
+_SEEN_MATCHES_LOCK = threading.Lock()
+_SEEN_MATCHES: set[str] = set()
+
+# Covers BOTH main matches and context matches
+_SEEN_CTX_LOCK = threading.Lock()
+_SEEN_CTX: set[str] = set()
+
+_SEEN_PLAYERS_LOCK = threading.Lock()
+_SEEN_PLAYERS: set[str] = set()
+
+# PUUIDs whose context has already been fetched (not re-fetched on restart)
+_SEEN_CTX_PLAYERS_LOCK = threading.Lock()
+_SEEN_CTX_PLAYERS: set[str] = set()
+
+
+# ── Initialization ────────────────────────────────────────────────────────────
+
+def init_seen_caches() -> None:
+    """Populate all in-memory seen sets from what's on disk."""
+    logger.info("Initializing seen caches from disk...")
+
+    for f in MATCH_DIR.glob("match_*.json"):
+        _SEEN_MATCHES.add(f.stem.replace("match_", ""))
+
+    for f in CTX_MATCH_DIR.glob("match_*.json"):
+        _SEEN_CTX.add(f.stem.replace("match_", ""))
+    # Main matches also count as "seen context" so we don't re-fetch them
+    _SEEN_CTX.update(_SEEN_MATCHES)
+
+    for f in PLAYER_DIR.glob("player_*.json"):
+        _SEEN_PLAYERS.add(f.stem.replace("player_", ""))
+
+    # A PUUID whose context directory contains at least one file is considered done.
+    # We track this with a sentinel file: context_matches/ctx_done_{puuid}.flag
+    for f in CTX_MATCH_DIR.glob("ctx_done_*.flag"):
+        _SEEN_CTX_PLAYERS.add(f.stem.replace("ctx_done_", ""))
+
+    logger.info(
+        "Caches: %d main matches, %d context matches, %d players, %d ctx-done players",
+        len(_SEEN_MATCHES), len(_SEEN_CTX) - len(_SEEN_MATCHES),
+        len(_SEEN_PLAYERS), len(_SEEN_CTX_PLAYERS),
+    )
+
+
+# ── API Key management ────────────────────────────────────────────────────────
+
+def get_current_api_key() -> str:
+    with _API_KEY_LOCK:
+        return _SHARED_API_KEY
+
+
+def trigger_key_refresh(old_key: str) -> str:
+    global _SHARED_API_KEY
+    with _API_KEY_LOCK:
+        if _SHARED_API_KEY != old_key:
+            logger.info("Another thread already refreshed the key. Resuming.")
+            return _SHARED_API_KEY
+
+        logger.warning("API KEY EXPIRED. Pausing for user input...")
+        print("\n" + "=" * 80)
+        print("API KEY EXPIRED (HTTP 403)")
+        print("1. Go to https://developer.riotgames.com/")
+        print("2. Regenerate your Development API Key.")
+        print("3. Open .env and replace the old key with the new one.")
+        print("=" * 80)
+        input(">>> Press ENTER here after saving the new key in .env ... \n")
+
+        new_key = load_api_key()
+        _SHARED_API_KEY = new_key
+        logger.info("API Key refreshed successfully. Resuming all threads.")
+        return new_key
+
+
+# ── Core API call wrapper ─────────────────────────────────────────────────────
+
+def safe_api_call(fn, *args, current_key: str, **kwargs) -> tuple[Optional[any], str]:
+    """
+    Execute an API call with retry logic.
+    Returns (result, current_key).  current_key may have changed on 403.
+    """
+    max_retries = 3
+    retries = 0
+
+    while retries < max_retries:
+        try:
+            return fn(*args, **kwargs), current_key
+
+        except ApiError as err:
+            status_code = getattr(getattr(err, "response", None), "status_code", None)
+
+            if status_code in (401, 403):
+                current_key = trigger_key_refresh(current_key)
+                try:
+                    fn.__self__._base_api._api_key = current_key
+                except AttributeError:
+                    pass
+                continue
+
+            elif status_code == 429:
+                retry_after = int(getattr(err, "response").headers.get("Retry-After", 10))
+                logger.warning("Rate limited (429). Sleeping %ds.", retry_after)
+                time.sleep(retry_after)
+                retries += 1
+                continue
+
+            elif status_code in [404, 500, 502, 503, 504]:
+                logger.debug("API Error %s: %s", status_code, err)
+                return None, current_key
+
+            else:
+                logger.error("Unhandled API Error %s: %s", status_code, err)
+                raise
+
+    logger.error("Failed after %d rate-limit retries.", max_retries)
+    return None, current_key
+
+
+# ── Player-level helpers ──────────────────────────────────────────────────────
+
+def fetch_high_elo_puuids(watcher: LolWatcher, region: str, current_key: str) -> tuple[list[str], str]:
+    """Fetch all PUUIDs from Challenger and Grandmaster in the given region."""
+    puuids = []
+    for tier in LEAGUES_TO_PULL:
+        logger.info("[%s] Fetching %s league...", region, tier)
+        if tier == "challenger":
+            league, current_key = safe_api_call(
+                watcher.league.challenger_by_queue, region, "RANKED_SOLO_5x5",
+                current_key=current_key,
+            )
+        else:
+            league, current_key = safe_api_call(
+                watcher.league.grandmaster_by_queue, region, "RANKED_SOLO_5x5",
+                current_key=current_key,
+            )
+        if not league:
+            continue
+        for entry in league.get("entries", []):
+            p = entry.get("puuid")
+            if p:
+                puuids.append(p)
+
+    logger.info("[%s] Found %d high-ELO players.", region, len(puuids))
+    return puuids, current_key
+
+
+def fetch_context_games(
+    watcher:     LolWatcher,
+    continent:   str,
+    region:      str,
+    puuid:       str,
+    depth:       int,
+    current_key: str,
+) -> str:
+    """
+    Fetch up to `depth` most recent prior games for `puuid` and store them
+    in context_matches / context_timelines.  Returns (possibly updated) current_key.
+
+    Writes a sentinel file `ctx_done_{puuid}.flag` when done so this puuid
+    is skipped on future runs.
+    """
+    with _SEEN_CTX_PLAYERS_LOCK:
+        if puuid in _SEEN_CTX_PLAYERS:
+            return current_key
+
+    match_ids, current_key = safe_api_call(
+        watcher.match.matchlist_by_puuid,
+        continent, puuid, queue=420, count=depth,
+        current_key=current_key,
+    )
+
+    if not match_ids:
+        _mark_ctx_done(puuid)
+        return current_key
+
+    n_fetched = 0
+    for mid in match_ids:
+        with _SEEN_CTX_LOCK:
+            if mid in _SEEN_CTX:
+                continue
+
+        match_data, current_key = safe_api_call(
+            watcher.match.by_id, continent, mid, current_key=current_key
+        )
+        if not match_data:
+            continue
+
+        timeline_data, current_key = safe_api_call(
+            watcher.match.timeline_by_match, continent, mid, current_key=current_key
+        )
+        if not timeline_data:
+            continue
+
+        with open(CTX_MATCH_DIR    / f"match_{mid}.json",    "w", encoding="utf-8") as f:
+            json.dump(match_data, f, ensure_ascii=False)
+        with open(CTX_TIMELINE_DIR / f"timeline_{mid}.json", "w", encoding="utf-8") as f:
+            json.dump(timeline_data, f, ensure_ascii=False)
+
+        with _SEEN_CTX_LOCK:
+            _SEEN_CTX.add(mid)
+
+        n_fetched += 1
+
+    if n_fetched > 0:
+        logger.debug("[%s] Fetched %d context games for %s...", region, n_fetched, puuid[:8])
+
+    _mark_ctx_done(puuid)
+    return current_key
+
+
+def _mark_ctx_done(puuid: str) -> None:
+    """Write a sentinel file so this PUUID's context is not re-fetched."""
+    (CTX_MATCH_DIR / f"ctx_done_{puuid}.flag").touch()
+    with _SEEN_CTX_PLAYERS_LOCK:
+        _SEEN_CTX_PLAYERS.add(puuid)
+
+
+# ── Worker threads ────────────────────────────────────────────────────────────
+
+def worker_thread(region: str, continent: str, context_depth: int) -> None:
+    """
+    Main loop for a single region: harvest new Challenger/GM games.
+    If context_depth > 0, also fetches context history for each participant.
+    """
+    threading.current_thread().name = f"Worker-{region.upper()}"
+
+    current_key = get_current_api_key()
+    watcher = LolWatcher(current_key)
+
+    puuids, current_key = fetch_high_elo_puuids(watcher, region, current_key)
+    if current_key != watcher._base_api._api_key:
+        watcher = LolWatcher(current_key)
+
+    for puuid in puuids:
+        latest_key = get_current_api_key()
+        if current_key != latest_key:
+            current_key = latest_key
+            watcher = LolWatcher(current_key)
+
+        # Fetch match list for this player
+        match_ids, current_key = safe_api_call(
+            watcher.match.matchlist_by_puuid,
+            continent, puuid, queue=420, count=MATCHES_PER_SUMMONER,
+            current_key=current_key,
+        )
+        if not match_ids:
+            continue
+
+        new_matches_downloaded = 0
+
+        for mid in match_ids:
+            with _SEEN_MATCHES_LOCK:
+                if mid in _SEEN_MATCHES:
+                    continue
+
+            match_data, current_key = safe_api_call(
+                watcher.match.by_id, continent, mid, current_key=current_key
+            )
+            if not match_data:
+                continue
+
+            timeline_data, current_key = safe_api_call(
+                watcher.match.timeline_by_match, continent, mid, current_key=current_key
+            )
+            if not timeline_data:
+                continue
+
+            # Save main match + timeline
+            with open(MATCH_DIR    / f"match_{mid}.json",    "w", encoding="utf-8") as f:
+                json.dump(match_data, f, ensure_ascii=False)
+            with open(TIMELINE_DIR / f"timeline_{mid}.json", "w", encoding="utf-8") as f:
+                json.dump(timeline_data, f, ensure_ascii=False)
+
+            with _SEEN_MATCHES_LOCK:
+                _SEEN_MATCHES.add(mid)
+            with _SEEN_CTX_LOCK:
+                _SEEN_CTX.add(mid)
+
+            new_matches_downloaded += 1
+
+            # ── Mastery + context for each participant ──────────────────────
+            participants = match_data.get("metadata", {}).get("participants", [])
+            for p in participants:
+                with _SEEN_PLAYERS_LOCK:
+                    if p in _SEEN_PLAYERS:
+                        # Context might still be needed even if mastery exists
+                        pass
+                    else:
+                        _SEEN_PLAYERS.add(p)
+                        mastery, current_key = safe_api_call(
+                            watcher.champion_mastery.by_puuid, region, p,
+                            current_key=current_key,
+                        )
+                        mastery_list = mastery if mastery else []
+                        with open(PLAYER_DIR / f"player_{p}.json", "w", encoding="utf-8") as f:
+                            json.dump(mastery_list, f, ensure_ascii=False)
+
+                # Context history fetch
+                if context_depth > 0:
+                    current_key = fetch_context_games(
+                        watcher, continent, region, p, context_depth, current_key,
+                    )
+
+        if new_matches_downloaded > 0:
+            logger.info("[%s] Downloaded %d new matches for %s...",
+                        region, new_matches_downloaded, puuid[:8])
+
+
+def context_pass_worker(region: str, continent: str, context_depth: int) -> None:
+    """
+    Worker for --context-pass mode.
+    Iterates over all already-seen players and fetches their context history.
+    """
+    threading.current_thread().name = f"CtxWorker-{region.upper()}"
+
+    current_key = get_current_api_key()
+    watcher = LolWatcher(current_key)
+
+    # Get the list of all known players at startup
+    with _SEEN_PLAYERS_LOCK:
+        all_players = list(_SEEN_PLAYERS)
+
+    logger.info("[%s] Context pass: %d players to process.", region, len(all_players))
+
+    # Distribute players across regions by consistent hashing to avoid
+    # all threads hammering the same players
+    region_list = list(REGION_MAP.keys())
+    my_index    = region_list.index(region)
+    my_players  = [p for i, p in enumerate(all_players) if i % len(region_list) == my_index]
+
+    logger.info("[%s] Assigned %d players (1/%d share).", region, len(my_players), len(region_list))
+
+    for puuid in my_players:
+        latest_key = get_current_api_key()
+        if current_key != latest_key:
+            current_key = latest_key
+            watcher = LolWatcher(current_key)
+
+        current_key = fetch_context_games(
+            watcher, continent, region, puuid, context_depth, current_key,
+        )
+
+    logger.info("[%s] Context pass complete.", region)
+
+
+# ── Argument parsing ──────────────────────────────────────────────────────────
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="LoL Bulk Harvester")
+    p.add_argument("--context-depth", type=int, default=0,
+                   help="Fetch this many prior games per player as context history (0=disabled)")
+    p.add_argument("--context-pass",  action="store_true",
+                   help="Back-fill context history for all existing players (no new game harvest)")
+    return p.parse_args()
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+def main() -> None:
+    global _SHARED_API_KEY
+
+    args = parse_args()
+    _SHARED_API_KEY = load_api_key()
+
+    init_seen_caches()
+
+    # Resolve effective context depth for context-pass mode
+    effective_depth = args.context_depth
+    if args.context_pass and effective_depth == 0:
+        effective_depth = 20
+        logger.info("--context-pass with no --context-depth; defaulting to depth=20.")
+
+    if args.context_pass:
+        logger.info("Starting Context Pass (depth=%d)...", effective_depth)
+        mode_fn = lambda region, continent: context_pass_worker(region, continent, effective_depth)
+    else:
+        logger.info("Starting Bulk Harvester (context_depth=%d)...", effective_depth)
+        logger.info("Targeting regions: %s", list(REGION_MAP.keys()))
+        mode_fn = lambda region, continent: worker_thread(region, continent, effective_depth)
+
+    threads = []
+    for region, continent in REGION_MAP.items():
+        t = threading.Thread(target=mode_fn, args=(region, continent))
+        threads.append(t)
+        t.start()
+
+    try:
+        while any(t.is_alive() for t in threads):
+            time.sleep(1)
+    except KeyboardInterrupt:
+        logger.warning("Shutdown requested. Waiting for threads to finish current requests...")
+    finally:
+        logger.info("Main thread exiting.")
+
+
+if __name__ == "__main__":
+    main()
