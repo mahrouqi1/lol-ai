@@ -49,10 +49,10 @@ PROJECT_ROOT  = Path(__file__).resolve().parent.parent
 DATA_DIR      = Path(os.environ.get("LOL_DATA_DIR", PROJECT_ROOT / "data" / "processed"))
 FEATURES_PATH = DATA_DIR / "features.parquet"
 HISTORY_PATH  = DATA_DIR / "player_game_summary.parquet"
-MODELS_DIR    = PROJECT_ROOT / "models"
+MODELS_DIR    = Path(os.environ.get("LOL_MODELS_DIR", PROJECT_ROOT / "models"))
 LOG_DIR       = PROJECT_ROOT / "logs"
 for _d in (MODELS_DIR, LOG_DIR):
-    _d.mkdir(exist_ok=True)
+    _d.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s  %(levelname)-8s  %(message)s",
