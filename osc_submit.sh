@@ -34,7 +34,10 @@ SCRIPT_REL=${SCRIPT#"$LOCAL_ROOT/"}
 # ALL keeps the remote environment (PATH, LMOD_*, ...); named vars are added
 # when set. Extend the list as SLURM templates start consuming new vars.
 FORWARDED=(ALL)
-for v in CONFIG SMOKE SLUG TRAIN_SCRIPT TRAIN_ARGS; do
+# NOTE: only forward SINGLE-TOKEN vars. Multi-word values (e.g. TRAIN_ARGS with
+# spaces) word-split through `sbatch --export` over ssh and break submission —
+# bake training args into a per-model slurm/train_<model>.slurm instead.
+for v in CONFIG SMOKE SLUG; do
   [ -n "${!v:-}" ] && FORWARDED+=("$v=${!v}")
 done
 EXPORT_ARG=$(IFS=,; echo "${FORWARDED[*]}")
