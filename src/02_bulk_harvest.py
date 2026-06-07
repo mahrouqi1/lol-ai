@@ -161,18 +161,16 @@ def trigger_key_refresh(old_key: str) -> str:
             logger.info("Another thread already refreshed the key. Resuming.")
             return _SHARED_API_KEY
 
-        logger.warning("API KEY EXPIRED. Pausing for user input...")
-        print("\n" + "=" * 80)
-        print("API KEY EXPIRED (HTTP 403)")
-        print("1. Go to https://developer.riotgames.com/")
-        print("2. Regenerate your Development API Key.")
-        print("3. Open .env and replace the old key with the new one.")
-        print("=" * 80)
-        input(">>> Press ENTER here after saving the new key in .env ... \n")
-
+        # Unattended (personal key): never block on input(). Reload from .env in
+        # case the key was rotated; otherwise back off briefly and let the bounded
+        # retry in safe_api_call decide whether to give up on this call.
+        logger.warning("API call got 401/403; reloading key from .env (unattended, no prompt).")
         new_key = load_api_key()
         _SHARED_API_KEY = new_key
-        logger.info("API Key refreshed successfully. Resuming all threads.")
+        if new_key == old_key:
+            time.sleep(5)
+        else:
+            logger.info("Key changed in .env; resuming with new key.")
         return new_key
 
 
@@ -199,6 +197,7 @@ def safe_api_call(fn, *args, current_key: str, **kwargs) -> tuple[Optional[any],
                     fn.__self__._base_api._api_key = current_key
                 except AttributeError:
                     pass
+                retries += 1   # bounded: don't loop forever on persistent 401/403
                 continue
 
             elif status_code == 429:
