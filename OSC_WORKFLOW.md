@@ -14,16 +14,20 @@ For the general OSC reference (storage, modules, pricing, troubleshooting) see
 
 ## When to use OSC vs the workstation
 
-The workstation has **2× RTX 4090 (24 GB each)** and the conda env `lol_shap_env`.
-Prefer it for: Phase 0, prototyping, LightGBM, and current-scale (133k-game)
-transformer training — all fit comfortably. Reach for OSC when:
+**Workstation = implementation/dev ONLY.** It has 2× RTX 4090 and the
+`lol_shap_env` conda env, but it is **shared** with other lab members. Use it to
+write/debug code, run unit + smoke tests, iterate, and make figures. Do **not**
+run training or long sweeps there.
 
-- **The equivariant temporal GNN** grows past what fits / what's fast on a 4090.
+**OSC runs every actual experiment**, including:
+- **Phase-0's full SHAP sweep** (mean- vs population-background) once the code is
+  smoke-tested locally.
+- **All training** — the current transformers now, the equivariant temporal GNN later.
 - **The exact 32-coalition Shapley sweep** (~`32 × N × T × 10` forward passes
-  per game) needs to run over many games — embarrassingly parallel, ideal for
-  several single-GPU OSC jobs in parallel (or Pitzer CPU if the model is small).
+  per game) — embarrassingly parallel → many single-GPU jobs in parallel (or
+  Pitzer CPU if the model is small).
 - **Data scale-up** to ~1M games (heavier feature processing — Pitzer hugemem).
-- You want to sweep hyperparameters concurrently instead of serially.
+- Hyperparameter sweeps (concurrent, not serial).
 
 ## One-time bootstrap
 
@@ -66,11 +70,17 @@ bash slurm/sync_from_osc.sh
 
 ## Cost guardrails
 
-- Lab credit is **$1,000/yr, shared, no rollover.** Check before anything big:
+- **Spend posture (through ~2026-06-28): generous.** Funding resets then,
+  substantial credit remains, and it does **not** roll over — so favor running
+  heavy/parallel work now rather than deferring. The "is this worth the $?" bar
+  is low until the reset; after it, revert to frugal.
+- The guardrails below are **mechanical** (avoid silent waste), not a reason to
+  withhold useful runs before the reset:
+  - Right-size: `--gpus-per-node=1` unless the script truly does DDP. Never
+    `--exclusive`. You are billed for what you **request**, not what you use.
+  - Run `/osc-submit-dryrun` first; always state the plan + est cost to Mazin
+    before submitting (see CLAUDE.md "Always confirm before doing").
+- Lab credit is **$1,000/yr, shared, no rollover.** Check current balance:
   `ssh mahrouqi1@ascend.osc.edu 'OSCusage -P PAS1457'`.
-- Right-size: `--gpus-per-node=1` unless the script truly does DDP. Never
-  `--exclusive`. You are billed for what you **request**, not what you use.
 - Rough rates: GPU-hour $0.09, CPU-core-hour $0.003. The provided
   `smoke_test.slurm` ≈ $0.03; `train_gpu.slurm` (12 h, 1 GPU) ≈ $1.08.
-- Always confirm the plan + estimated cost with Mazin before submitting
-  (see CLAUDE.md "Always confirm before doing").

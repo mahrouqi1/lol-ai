@@ -30,7 +30,19 @@ reuses models already trained. Do this on the workstation before building the GN
 - Models: `models/` (gitignored). Reports/figures: `reports/` (gitignored).
 - Jobs: `slurm/` (OSC SLURM scripts). OSC wrapper: `osc_submit.sh`. See `OSC_WORKFLOW.md`.
 
-## Environment & commands (local workstation)
+## Compute policy (important)
+- **Workstation = implementation/dev ONLY.** It's **shared** with other lab
+  members. Use it to write code, run unit/smoke tests, iterate quickly, and make
+  figures — NOT for training or long sweeps, even though it has the GPUs.
+  Anything holding a GPU > a few minutes goes to OSC.
+- **OSC runs all real experiments** (Phase-0 SHAP sweep, all training, the
+  Shapley sweep, scale-up). See `OSC_WORKFLOW.md`.
+- **Spend generously on OSC through ~2026-06-28** (funding resets then;
+  substantial credit left, no rollover — use it). Still `/osc-submit-dryrun` +
+  right-size every job; just don't withhold heavy runs on cost grounds until the
+  reset. Revert to frugal after.
+
+## Environment & commands (local workstation — for dev/smoke only)
 - This workstation: Linux, **2× RTX 4090 (24 GB each)**, conda env
   `lol_shap_env` at `/home/almahrouqi.1/anaconda3/envs/lol_shap_env`.
 - Note: `environment.yml` pins **CPU** torch; verify GPU torch is actually
@@ -41,8 +53,9 @@ reuses models already trained. Do this on the workstation before building the GN
 
 ## Always confirm before doing
 - **OSC SLURM submission.** Run `/osc-submit-dryrun` first; state cluster,
-  resources requested, est wall-clock (OSC vs the local 4090s), and est cost.
-  Never type `sbatch` directly (guard hook + deny rule); use `bash osc_submit.sh`.
+  resources requested, est wall-clock, and est cost. Never type `sbatch` directly
+  (guard hook + deny rule); use `bash osc_submit.sh`. (Cost bar is low until the
+  ~2026-06-28 reset, but always still right-size and confirm.)
 - **Riot ToS / deployment.** Publishing the model + repo and *per-game* lookups
   are fine (performance analysis). A **global LP-style ladder** over all ranked
   games is a prohibited "alternative skill-ranking system" — do not build or host

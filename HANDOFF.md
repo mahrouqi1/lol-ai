@@ -98,12 +98,21 @@ Different metrics — pick deliberately (leaning conditioned).
   intent/behavioral-consistency case study. **No public gameplay griefing
   labels exist** — frame as behavioral consistency / deviation, not "detection."
 
-### Workstation vs OSC split
-- **Workstation (2× 4090):** Phase 0, prototyping, LightGBM, current-scale
-  (133k) transformer/GNN training, debugging, figures.
-- **OSC (see `OSC_WORKFLOW.md`):** the heavy GNN once it outgrows a 4090; the
-  Phase-2 Shapley sweep over many games (parallel single-GPU jobs); 1M-game data
-  scale-up (Pitzer hugemem). Always `/osc-submit-dryrun` + confirm cost first.
+### Compute policy: workstation = implementation only; OSC = all real runs
+- **Workstation (2× 4090) is SHARED** with other lab members → use it for
+  **implementation/dev only**: writing code, unit/smoke tests, quick iteration,
+  inspecting outputs, figures. Do NOT tie it up with training or long sweeps,
+  even though it's capable. Anything that holds a GPU for more than a few minutes
+  belongs on OSC.
+- **OSC (see `OSC_WORKFLOW.md`) runs all actual experiments:** Phase-0's full
+  SHAP sweep, every training run (transformers now, the GNN later), the Phase-2
+  Shapley sweep (parallel single-GPU jobs), and 1M-game scale-up (Pitzer hugemem).
+- **Spend generously through ~2026-06-28.** OSC funding resets then; substantial
+  credit remains and does NOT roll over — favor running heavy/parallel work on
+  OSC *now* rather than deferring. Cost guardrails still apply mechanically
+  (`/osc-submit-dryrun`, right-size, no `--exclusive`, no blind 4-GPU), but the
+  "is this run worth it?" bar is low until the reset. After the reset, revert to
+  frugal defaults.
 
 ### Riot ToS (deployment constraints — keep in view)
 Publishing model + repo = fine. Per-game lookup = fine (performance analysis).
@@ -147,4 +156,8 @@ CLAUDE.md (not the orchestrator brief). Then:
   review whether any rules are worth promoting, else delete.
 - git initialized; baseline commit + framework commit on branch
   `framework-migration-2026-06-07`.
-**Open:** run `/promote-legacy`; decide whether to keep `settings.local.json`.
+**Legacy promotion:** COMPLETE (2026-06-07). No `CLAUDE.legacy.md` (case-3
+migration). Sole user-level auto-memory entry (`lol-ai-migrated-7th-project`)
+is orchestrator-tracking context and correctly stays in auto-memory — nothing
+elevated to CLAUDE.md or conventions.
+**Open:** decide whether to keep `settings.local.json` (24 Windows-era lines).
