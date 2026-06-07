@@ -46,10 +46,23 @@ confirms learning (AUC by min 0.54->0.88). Rerunning: full=5505526, 25k=5505527,
   GLOBAL** (multi-region threading does NOT bypass the app-wide limit), ~2 req/game
   -> **~25 games/min ≈ 36k/day** continuous; dev keys expire every 24h (needs
   babysitting). 133k set took ~17 calendar days intermittent.
-- **1M games: impractical on a dev key (~a month of babysat harvesting).** A
-  **production API key** (app limit ~30k req/10min) -> ~1500 games/min -> 1M in
-  ~half a day to a couple days. So scaling to 1M realistically REQUIRES applying
-  for a production key (or accept ~250-500k as a stretch on dev).
+- **1M games: impractical on a dev key (~a month of babysat harvesting).**
+- **API KEY TYPES (researched 2026-06-07):**
+  - *Development:* 20 req/s, 100 req/2min, **expires every 24h** (current).
+  - *Personal:* **SAME limits** (20/s, 100/2min — "won't be approved for rate
+    increases") but **no expiry**; explicitly allows research/private use; cannot
+    be public-facing. → Removes the 24h babysitting but does NOT speed up harvest.
+    Realistic unattended: ~36k/day → ~250k in ~7d, ~500k in ~14d.
+  - *Production:* **500 req/10s, 30,000 req/10min** (~36-60x faster → 1M in <1 day),
+    + Tournaments API. BUT requires a **working, PUBLIC-FACING product that benefits
+    players**, reviewed for quality/completeness (~1-3 week review).
+  - **CATCH:** a pure research harvester does NOT qualify for Production (not a
+    player product). To get Production we'd have to ship a real player-facing tool
+    — e.g., the per-game contribution analyzer (ToS-ALLOWED) — NOT a global ladder
+    (ToS-BANNED, see Part A). So: Personal = easy, removes babysitting, same speed;
+    Production = fast but is a product-building + review commitment.
+  - **Recommendation:** Personal key now for unattended ~250-500k; pursue Production
+    only if/when we build the per-game contribution tool as a shippable product.
 - **Patch coverage:** current 133k already spans **6 patches** (15.24, 16.1-16.5).
   No `patch` column in features yet — `gameVersion` is in raw match JSON. To use
   patch as a signal we must extract it (info.gameVersion) into features.
