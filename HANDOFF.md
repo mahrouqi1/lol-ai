@@ -5,6 +5,39 @@ Cross-chat state **and** the authoritative research plan. Read the latest entry
 
 ---
 
+## 2026-06-07 (later) — Phase 0 implemented + first result
+
+**Built** [src/08_phase0_baseline_divergence.py](src/08_phase0_baseline_divergence.py):
+holds the LightGBM snapshot model fixed, varies only the replacement baseline,
+attributes at the **player level** via exact per-team interventional Shapley
+(2^5=32 coalitions/team) computed directly with `booster.predict` + background
+swapping. This sidesteps a real blocker — **shap's interventional `TreeExplainer`
+cannot handle this model's LightGBM categorical splits** (`TreeEnsemble has no
+attribute values`); the direct group-Shapley does, and it's exactly the Phase-2
+estimator previewed at slot level.
+
+**Model/data caveat found:** `models/lgbm_snapshot.txt` (Mar 10) was trained on
+**401** features; current `features.parquet` has 478. Script drives the feature
+list from `booster.feature_name()` so it explains exactly what the model expects.
+Available conditioning columns: `region`, `minute` only (no patch/rank — all
+Challenger+GM). GPU torch IS installed (2.5.1+cu121) despite env.yml's CPU pin.
+
+**First result (SMOKE, 149 rows, K=12 — noisy, not final):** top contributor
+flips **37.6%** of game-minutes between mean-bg and conditional-bg; slot-ordering
+Spearman 0.69. Figures: `reports/phase0_baseline_divergence.png`,
+`reports/phase0_pairwise_disagreement.png`. The motivating signal is present.
+
+**Open / next:**
+- Scale up (full sweep → OSC Pitzer CPU; needs one-time OSC bootstrap: setup_env
+  + push processed parquet & model to scratch). Funding generous through ~06-28.
+- Metric refinement: per-minute argmax flip-rate is inflated by near-zero
+  early-game attributions — add magnitude-weighting and/or a per-game final/
+  integrated attribution, and restrict to mid/late game.
+- Conceptual caveat to keep stating: Phase 0 is on the game-state model
+  (mediator-level) by design — it's the motivator, not the final method.
+
+---
+
 ## 2026-06-07 — Re-grounding + framework setup (orchestrator session)
 
 This session migrated LoL_AI into the framework and re-grounded the project on
