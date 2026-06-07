@@ -34,14 +34,25 @@ to scratch; added per-model slurm scripts (train_cpu, train_04b, train_04c) afte
 hitting a `sbatch --export` multi-word word-split bug (fixed osc_submit to forward
 single-token vars only).
 
-**FULL-DATA TRAINING LAUNCHED ON OSC (2026-06-07):**
-| Model | Script | Job | Cluster | Notes |
-|------|--------|-----|---------|-------|
-| 04a snapshot LightGBM | train_cpu.slurm | 48074894 | Pitzer CPU | fold0 AUC 0.827 early; fresh model on current 478-feat data (fixes staleness) |
-| 04b causal Transformer | train_04b.slurm | 5505405 | Ascend A100 | d256/8h/6L, 20 ep |
-| 04c player-context Transformer | train_04c.slurm | 5505406 | Ascend A100 | K=20 history, 20 ep |
-| 04d minute-context | train_04d.slurm | pending seq build | Ascend | IN PROGRESS (below) |
-| 04e equivariant GNN | train_04e.slurm | 5505414 | Ascend A100 | full run, d128/4L/40ep |
+**FULL-DATA TRAINING RESULTS/STATUS (2026-06-07):**
+| Model | Job | Status | Result |
+|------|-----|--------|--------|
+| 04a snapshot LightGBM | 48074894 (Pitzer) | ✅ DONE | AUC by min: 5-10=0.75, 10-15=0.83, 15-20=0.87, 20-25=0.90, 25+=0.90. Fresh 478-feat model. |
+| 04e equivariant GNN | 5505414 (Ascend) | ✅ DONE | val AUC **0.834**, Brier 0.166, **ECE 0.013** (excellent calib), antisymmetry 0.0. ~12min. |
+| 04f GNN + game context | 5505445 (Ascend) | ⏳ running | the model the user requested; see below |
+| 04b causal Transformer | 5505405→**5505451** | ♻ resubmitted | first run OOM-killed; +`--mem=192G` |
+| 04c player-context Transf | 5505406→**5505452** | ♻ resubmitted | first run OOM-killed; +`--mem=192G` |
+| 04d minute-context | train_04d.slurm | ⏳ pending seq build | needs sequences (building) |
+
+**LESSON (candidate cross-project learning):** OSC GPU jobs with big-data
+preprocessing (StandardScaler/sequence-padding on millions of rows) OOM on the
+default 8-core RAM share. Add explicit `#SBATCH --mem=192G` (Ascend has 1 TB;
+memory isn't the cost driver, GPU-hours are). Done for 04b/04c/04d/04f.
+
+**Early read:** the **equivariant GNN (04e) is the standout** — it ties the
+LightGBM AUC ceiling but with dramatically better calibration (ECE 0.013), which
+is exactly what the contribution method needs. And it's the model the 32-coalition
+engine plugs into natively.
 
 **04d pipeline (in progress):** 03b builds sequences from RAW JSONs (`data/raw/`,
 local only — NOT on OSC), so `player_minute_sequences.parquet` is being built on
