@@ -11,11 +11,26 @@ Lead model = **equivariant GNN + player-history context (04f)**; exact per-team
 Shapley **contribution engine (09)** works on it. Win-pred is competitive with the
 honest literature; the real targets are **early-game AUC + calibration + contribution
 validity**, not pooled AUC.
-- **Branch:** main. **Last touched:** 2026-06-07.
+- **Branch:** main. **Last touched:** 2026-06-11 (harvester crash-fix + restart).
 - **Active chats:** this = PARKED monitor; **Chain-D (implementations)** owns
   `src/03*`/`src/04*`/`slurm/` (LIVE); **P2 (validation)** owns `src/09_*`+validation
   (LIVE). P1 (paper) deferred. See WORK DISPATCH PLAN below.
-- **Running:** all-elo harvest only (OSC training all complete).
+- **Running:** all-elo harvest (NA1+EUW1+KR, `--tiers all --players-per-tier 1000`),
+  **RESTARTED 2026-06-11 13:42** (pid in `logs/harvest.pid`, log
+  `logs/harvest_20260611_*.log` + `logs/bulk_harvest.log`), nohup-detached from the
+  NEW project dir (`_side-projects/lol-ai`) with the NEW env
+  (`conda_envs/lol-ai`; old `repos/LoL_AI` + `lol_shap_env` paths are gone).
+  Previous run **died 2026-06-08** worker-by-worker (EUW1 01:46, NA1 05:55, KR 14:19)
+  on unhandled `requests` transport errors (ConnectionError/ChunkedEncodingError) —
+  NOT a key expiry; zero 401/403s. **FIXED 2026-06-11:** `safe_api_call` in
+  `src/02_bulk_harvest.py` now catches `requests.exceptions.RequestException`
+  (retry w/ 15s sleep within max_retries). ~3 days of collection lost (Jun 8–11).
+  Note: seen-cache init took **~14 min** this restart (cold NFS + lab load; was 0.4s
+  warm) — a freshly-restarted harvester showing only "Initializing seen caches" for
+  many minutes is normal, check `ps` D-state before assuming hang.
+  ⚠️ Still not crash-proof across reboots (no systemd/cron keep-alive) — re-launch
+  with the same nohup command. Personal key (app limit 100/120s + 20/1s **per
+  region**, confirmed from response headers).
 - ✅ Canonical `models/gnn_*.pt` RESTORED (2026-06-07, Chain-D): snapshot+context from
   `models/_validated/`, and `gnn_static_model.pt` pulled fresh from OSC (patch-aware
   full-data, AUC 0.8355). Root cause fixed: 04f now honors `LOL_MODELS_DIR` (was
@@ -30,11 +45,59 @@ validity**, not pooled AUC.
   extraction); (4) rank+patch features from `game_meta` (provide rank feature to P2
   for replacement-baseline conditioning); (5) reprocess + retrain + re-run
   `10_compare_models.py` once harvest accumulates diversity.
-- **P2:** C.4 validation suite (axiomatic / convergent / **predictive-vs-naive-stats** /
-  counterfactual / ablation / CIs) + ex-ante/ex-post intent signal, on `models/_validated/`.
-- **Harvest:** running; consider start-offset paging for older patches (timelines ~1yr).
-- **Strategic:** 1M games needs a **production API key** (public tool required); ~250-500k
-  feasible on the personal key.
+  - **(NEW, user-requested 2026-06-07) — ADD ABSOLUTE BLUE/RED SIDE to 04e/04f.**
+    *Why:* the current models are team-RELATIVE (logit = Σ_blue score − Σ_red score,
+    no absolute side feature) → hard antisymmetry `f(A,B)=1−f(B,A)` → they output
+    **exactly 0.5** on any mirror matchup and **cannot represent the real ~+1.15pp
+    blue-side advantage** (blue wins 51.15% in our 131,620 games; verified the model
+    gives 0.500000 on mirrored states). User wants side to count **for contribution
+    too**: a top laner with identical performance on blue vs red should get
+    *different* contributions, because one side is inherently favored.
+    *What to implement (the version that achieves the goal):* a global side-bias
+    **scalar is NOT enough** — a constant cancels in each player's "real vs
+    same-side replacement" marginal, so it barely moves contributions. Instead add an
+    **absolute per-node side embedding** (a learned blue-vec / red-vec added to every
+    node's features; all 5 nodes on a side share it → **within-team permutation
+    invariance is preserved**, only the team-swap antisymmetry is dropped). This lets
+    side **interact** with players via message passing, so the side advantage can
+    materially change individual contributions (advantaged-side leads compound;
+    strong games on the disadvantaged side count more). Keep within-team perm
+    invariance EXACT (assert it); expect the model to learn ≈+1pp blue prior.
+    *Downstream (already handled / notes for P2):*
+      • Contribution engine `src/09` + validation suite need **no change** — "remove
+        player" keeps a node on its own side and samples a **same-side, same-role**
+        replacement, so side is preserved automatically and now flows into φ.
+      • Validation `src/12` SYMMETRY test must be **reframed**: the mirror test
+        (φ_blue=−φ_red, currently exact in fp64) will NO LONGER hold by design —
+        change it to assert antisymmetry *up to the learned side prior* and report
+        that residual as the measured side advantage. Efficiency + null-player tests
+        are unaffected (still exact). P2 to add a NEW convergent check: blue-side
+        players show systematically higher own-team contribution than red for matched
+        performance, in the expected direction (~the 1pp).
+      • Pair naturally with (4): a side+rank-conditioned replacement baseline.
+- **P2:** ✅ C.4 validation suite BUILT + RUN (`src/11..18`, `reports/validation_report.md`):
+  axiomatic/convergent/counterfactual/baseline-divergence/stability/ex-ante-expost all
+  pass; predictive underpowered in apex (ties naive — needs multi-ELO). Remaining:
+  re-run rank+predictive on multi-ELO; rank-conditioned baseline; OSC full sweeps;
+  ΔW_t increments. New src files uncommitted. **When Chain-D ships absolute side
+  (above):** reframe `src/12` symmetry to antisymmetry-up-to-side-prior, and add a
+  convergent test that blue-side own-team contribution > red for matched performance.
+- **Harvest:** running (see Running above); consider start-offset paging for older
+  patches (timelines ~1yr). 4th continent **SEA** (+~33%) intentionally deferred per
+  user — NA+EU+KR is enough for now. Reboot keep-alive (cron/systemd) **declined
+  2026-06-11 per user** (workstation reboots ~1×/month); relaunch manually after
+  updates.
+- **Strategic / API keys (re-verified 2026-06-08 vs Riot portal):** we hold a
+  **Personal** key (no expiry, 20/s + 100/2min **per region** — the per-region scope
+  is confirmed both in Riot docs AND empirically by the ~83.5k/day across 3 regions;
+  the old HANDOFF "GLOBAL limit" claim was WRONG). **Personal ≈ Production speed only
+  via per-region parallelism**; the real lift is a **Production** key (500/10s +
+  30,000/10min per region → 1M/day + Tournaments API) which is **gated on a working,
+  public, player-facing product** (link to a working site/prototype, free player tier,
+  ~1–3wk review). A pure research scraper does NOT qualify; a global LP ladder is
+  ToS-banned. **Plan:** harvest on Personal now; once contribution results are solid,
+  ship a **simple public GitHub tool** (enter a match → see per-player contribution)
+  = the ToS-allowed product that earns Production. Sources in session notes below.
 
 ## Failed approaches (don't re-discover)
 - 04b transformer @ lr 1e-3 (d256/6L) **diverges epoch 1** (sigmoid saturates, BCE~7,
@@ -50,8 +113,123 @@ validity**, not pooled AUC.
 - A `--limit` smoke writing default `LOL_MODELS_DIR` **clobbers canonical full-data models**
   → always redirect smoke output.
 - Pooled AUC is misleading (late-game ≈ leakage); use early-game + calibration.
+- Harvester `safe_api_call` catching only `riotwatcher.ApiError` **let `requests`
+  transport errors kill worker threads silently** (one blip = one region dead,
+  process exits when last worker dies; looked like key expiry but had zero 401/403s).
+  Fixed 2026-06-11: catch `requests.exceptions.RequestException` + retry.
+- A freshly-restarted harvester stuck on "Initializing seen caches" for many minutes
+  is cold-NFS scan time (~14 min at 150k matches under lab load), not a hang.
 
 ## Recent session entries (full detail, newest at top)
+
+### 2026-06-11 14:17  harvest-recovery (monitor chat)
+**What was done:**
+- Diagnosed the dead harvester: the 06-08 restart died **worker-by-worker on 06-08**
+  (EUW1 01:46, NA1 05:55, KR 14:19) from unhandled `requests` transport errors
+  (`ConnectionError`, `ChunkedEncodingError`) escaping `safe_api_call`, which only
+  caught `riotwatcher.ApiError`. NOT a key issue — zero 401/403s in the logs.
+- **Fixed** `src/02_bulk_harvest.py`: added `except requests.exceptions.RequestException`
+  to `safe_api_call` (15s sleep + retry within the existing max_retries=3 budget).
+- **Restarted** the harvester 13:42 nohup-detached from the new project dir with the
+  new `conda_envs/lol-ai` env; verified all 3 workers downloading by 13:58.
+- Updated the "Running" block above; corrected `logs/harvest.pid` to the python PID.
+**What was learned:**
+- ~3 days of collection lost (06-08 14:19 → 06-11 13:42); throughput was already ⅓
+  for most of 06-08 as workers died one at a time.
+- Seen-cache init took **~14 min** (cold NFS + heavy lab load; 0.4s warm on 06-08).
+  A restart showing only "Initializing seen caches" for minutes is NOT hung —
+  check for D-state on `rpc_wait_bit_killable` before assuming.
+- Old launch paths are gone: `repos/LoL_AI` and `~/anaconda3/envs/lol_shap_env` no
+  longer exist; launch from `_side-projects/lol-ai` with `conda_envs/lol-ai`.
+- User decision: **no reboot keep-alive needed for now** (workstation reboots ~1×/mo
+  for updates); manual relaunch is acceptable.
+**Files modified:** HANDOFF.md (+184/-..), src/02_bulk_harvest.py (fix); the other
+~32 modified files (CLAUDE.md, environment.yml, slurm/*, src/*) predate this session
+(env-rename/migration churn owned by sibling chats).
+**Next chat needs to know:**
+- Harvester PID in `logs/harvest.pid`; logs `logs/harvest_20260611_134243.log` +
+  `logs/bulk_harvest.log`. Expect ~58 games/min ≈ 83.5k/day when healthy.
+- If it stops again, transport errors are now retried — check the log tail for a
+  NEW failure class before re-applying the old diagnosis.
+- After a workstation reboot (~monthly), relaunch manually: nohup + `--tiers all
+  --players-per-tier 1000` from the project dir (see Running block).
+**Backup status:** 8 untracked (src/11-18 validation suite) / 34 modified / 0
+unpushed — harvest fix + HANDOFF committed this session; rest left to owning chats.
+**Open questions:**
+- Should the 06-08→06-11 gap shift the 250k/500k milestone ETAs communicated earlier?
+- Commit P2's untracked src/11-18 validation suite (owned by P2 chat)?
+**Suggested first prompt for the next chat:** "Check `tail logs/bulk_harvest.log`
+and confirm the harvester is still collecting; then continue per Pending/Next."
+
+### 2026-06-08  P2 — side-advantage decision, API-key research, harvester restart (validation chat)
+**What was done (continuation of the validation session):**
+- **Side advantage:** user clarified the model should represent absolute blue/red
+  side AND have it flow into contributions. Verified the current GNN can't: it's
+  team-relative → outputs **exactly 0.5 on mirror matchups**, while blue actually
+  wins **51.15%** (131,620 games). Logged the fix as a Chain-D task (Pending):
+  **per-node side embedding** (a scalar bias is insufficient — cancels in the
+  same-side-replacement marginal). Memory [[lol-side-advantage-decision]].
+- **API keys re-verified vs Riot portal:** Dev (24h) / Personal (no expiry, same
+  limits) / Production (500/10s+30k/10min, needs public product + 1–3wk review).
+  KEY FACT: app limits are **per region** (Riot docs + confirmed empirically), so the
+  old "GLOBAL limit" note was wrong. Production is gated on shipping a player-facing
+  tool → plan: simple public GitHub contribution tool earns it. (Sources:
+  developer.riotgames.com/docs/portal; support-developer.../Production-Key-Applications;
+  hextechdocs.dev/rate-limiting.)
+- **Harvester:** found it had **died ~06-07 19:29** (process killed mid-backoff when
+  parent shell closed; HANDOFF wrongly said "Running"). Confirmed code is correct
+  (3 independent region threads NA/EU/KR, own `LolWatcher` each, per-region 429
+  backoff). **Restarted nohup-detached** (`logs/harvest.pid`, `logs/harvest_*.log`);
+  measured **~58 games/min ≈ 83.5k/day** → 250k in ~1.2d, 500k ~4.2d, 1M ~10d.
+**For Chain-D:** (1) implement the side embedding (full spec in Pending); (2) the
+harvester has no keep-alive — consider a cron/systemd or `--resume` wrapper so a
+reboot doesn't silently stop data collection; SEA 4th continent deferred per user.
+**For P2 (me/next):** when side lands, reframe `src/12` symmetry + add side-direction
+convergent test; re-run rank-convergent + predictive once multi-ELO data accumulates.
+
+### 2026-06-07  P2 — validation suite built + run (validation chat)
+**What was done:** built the full Phase-3 contribution **validation suite**
+(`src/11_validate_lib.py` shared exact estimator + `src/12..18` drivers) and ran all
+seven tests on `models/_validated/` (full-data 04e snapshot 0.835/0.013 and 04f
+context 0.838/0.009, re-pulled from OSC after the local-smoke clobber). Report:
+**`reports/validation_report.md`** (+ `reports/validation_*.{png,json}`).
+- Vectorized the estimator (all 32 coalitions in ONE forward) → ~4× speedup; folded
+  into the shared lib (09 left untouched, still the production engine).
+**Results (workstation-scale demos; full sweeps → OSC):**
+- **Axiomatic** ✅ exact — efficiency 4.8e-17, team-swap symmetry 1.4e-16 (fp64
+  mirror test; this GNN encodes role *positionally* so naive same-team symmetry
+  doesn't apply), null-player 0.0.
+- **Convergent** ✅ — role jungle 0.109>bottom 0.105>middle 0.091>top 0.087>utility
+  0.050 (tight CIs); winners +0.063 own-team φ over losers (CI excl 0); carry/fighter
+  ≈0.092 ≫ frontline/utility 0.053 (+0.039, CI excl 0). **Rank deferred** — data is
+  ~all apex (141k APEX_UNTAGGED, 3.3k Chall, 30 Iron); auto-activates on multi-ELO.
+- **Counterfactual** ✅ — seeded degradation: φ(real)>φ(weak)>φ(int) 100% rows,
+  φ(int)<0 99.8%.
+- **Predictive** ⏸ **underpowered** — apex-only, all predictors ~0.5 future-win AUC
+  (matchmaking ceiling), contribution **ties** best naive proxy (winrate) Δ−0.021,
+  CI [−0.089,+0.044]. Needs multi-ELO + OSC scale. Reinforces "win-pred is ceiling-
+  limited" thesis. (Open Q from prev handoff: contribution does NOT yet beat naive
+  stats in apex — but neither does anything; the test can't discriminate here.)
+- **Baseline-divergence** ✅ — GNN-native motivating figure: top-1 flips 58–68% btwn
+  baselines; on-manifold pop|cond agree most (Spearman 0.55), **mean is the outlier**
+  (confirmed at K=40; K=16 was MC-noise-ambiguous).
+- **Stability** ✅ — material φ rel-halfwidth 0.40, 90% sign-stable; std ∝ 1/√K
+  (0.065→0.023 for K=4→32).
+- **Ex-ante/ex-post** ✅ — 04f history model; seeded griefing gap +0.11→−0.22,
+  separation **AUC 0.96**. Framed as behavioral-consistency, NOT detection.
+**Coordination / gotchas:**
+- **MODEL CLOBBER (resolved):** Chain-D's local early-stopping smoke (limit=400)
+  overwrote `models/gnn_snapshot.pt`/`gnn_context_model.pt` (→0.74/0.71) mid-session.
+  Re-pulled full-data copies into **`models/_validated/`** (validation-owned). The
+  whole suite points there. **Chain-D action:** redirect smoke output
+  (`LOL_MODELS_DIR=models/_smoke`) and `bash slurm/sync_from_osc.sh` to restore
+  `models/`.
+- Background runs need `PYTHONUNBUFFERED=1` and **don't pipe to `tail`/`head`**
+  (the pipe buffers → output only at exit).
+**Next:** (1) re-run rank-convergent + predictive once multi-ELO harvest spreads
+tiers; (2) add a 4th **rank-conditioned** baseline to `src/16` when rank lands;
+(3) OSC full-scale predictive + baseline sweeps; (4) re-run on ΔW_t **increments**
+for the telescoping paper story. New src files are **uncommitted** (untracked).
 
 ### 2026-06-07  Chain-D — early-stopping + patch-indexed static (implementations chat)
 **What was done:**
@@ -79,12 +257,28 @@ gated on harvest diversity. Both early-stopping + patch-aware paths de-risked at
 for the Task-6 retrain. Early-stopping cut wall-clock ~4× (6min vs 25min).
 **Commits:** 8ab5df2 (early-stop), 20b1da4 (patch-index static), 9798c4c (LOL_MODELS_DIR).
 **Sidecars on scratch:** new per-patch `champion_static.parquet` (2064 rows) + `game_meta.parquet`.
-**Next chat (Chain-D):** Task 3 (rune/spell static encoders — runes/spells already in features;
-extend 03c-style table from runesReforged.json/summoner.json) + optional champ TEXT embeddings;
-Task 4 (item modeling, heavy — timeline ITEM_PURCHASED/SOLD/UNDO/DESTROYED inventory sim →
-per-(game,minute,slot) builds → item static encoder from item.json); Task 5 (rank+patch as
-model features — coordinate with P2: Chain-D provides rank feature, P2 consumes in src/09
-replacement baseline).
+**Next chat (Chain-D), priority order:**
+- **(NEW top priority, user-requested) absolute blue/red side in 04e/04f** — see the
+  detailed spec under Pending/Next. Add a learned per-node side embedding (blue-vec/red-vec
+  shared across a side's 5 nodes) so within-team perm invariance stays EXACT but team-swap
+  antisymmetry is intentionally dropped; model should learn ≈+1pp blue prior and side should
+  flow into contributions via message passing. Coordinate with P2 (they reframe src/12
+  symmetry → antisymmetry-up-to-side-prior + add a blue>red convergent check).
+- Task 3 (rune/spell static encoders — already in features; extend 03c-style table from
+  runesReforged.json/summoner.json) + optional champ TEXT embeddings.
+- Task 4 (item modeling, heavy — timeline ITEM_PURCHASED/SOLD/UNDO/DESTROYED inventory sim →
+  per-(game,minute,slot) builds → item static encoder from item.json).
+- Task 5 (rank+patch as model features — coordinate with P2: Chain-D provides rank feature,
+  P2 consumes in src/09 replacement baseline; rank-convergent/predictive auto-activate then).
+- Task 6 (reprocess+retrain+re-run 10_compare_models.py) gated on harvest diversity.
+**Open questions:**
+- Side embedding added pre- or post-message-passing? (pre lets it interact; assert perm-invariance either way.)
+- Does dropping antisymmetry hurt calibration? (ablate ECE side-on vs side-off.)
+- Patch-static payoff unmeasurable until harvest spans multiple metas — recheck at Task 6.
+**Suggested first prompt for the next chat:** "Chain-D: implement absolute blue/red side
+embedding in 04e/04f per the HANDOFF spec (learned per-side node vec, keep within-team perm
+invariance exact, drop team-swap antisymmetry), smoke-verify the ≈+1pp blue prior and exact
+perm-invariance, then OSC-validate."
 
 ### 2026-06-07  setup + experiments (this chat)
 **What was done:**
@@ -552,3 +746,16 @@ migration). Sole user-level auto-memory entry (`lol-ai-migrated-7th-project`)
 is orchestrator-tracking context and correctly stays in auto-memory — nothing
 elevated to CLAUDE.md or conventions.
 **Open:** decide whether to keep `settings.local.json` (24 Windows-era lines).
+
+### 2026-06-10 orchestrator — Q-C4 post-reorg conformance sweep
+**Reorg record:** renamed LoL_AI → lol-ai (moved to _side-projects/ 2026-06-09, framework-tooled); remote mahrouqi1/lol-ai added, main pushed (712 KB tracked; 139 GB data untracked). OSC ess+scratch LoL_AI → lol-ai (correction: this repo DID have OSC workspaces); 9 slurm/sync files fixed; CLAUDE.md header lol-shap → lol-ai.
+**Conformance:** .framework + imports OK; environment.yml present; zero stale names/abs paths.
+
+### 2026-06-11 orchestrator — workstation conda env: how to use + extend
+**Env:** `conda activate lol-ai` (by name, never absolute path). Lives on NFS at `conda_envs/lol-ai`; the repo-root `environment.yml` (curated spec) is the source of truth, the env on disk is disposable. Single source for everything env-related: `_framework/_docs/conda-environments.md` — read it before changing the env. This repo's env: torch 2.5.1+cu121, curated spec — pip block needs the pytorch extra-index line (see doc) if ever re-solved.
+**Installing new packages — do it this way:**
+- First, the standard exports (NFS=`/research/nfs_shafieezadeh_1/mahrouqi.1`): `export TMPDIR=$NFS/conda_envs/.build/tmp PIP_CACHE_DIR=$NFS/conda_envs/.build/pip-cache PYTHONNOUSERSITE=1`. PYTHONNOUSERSITE is new (2026-06-11): a stale RHEL-patched pip in `~/.local/lib/python3.11/site-packages` shadows every py3.11 env and breaks ALL in-env pip runs on the Ubuntu node (196872) with a "TLS CA certificate bundle" error; same command works on the other node, so it looks node-random.
+- conda deps: `$NFS/conda_envs/.tools/bin/mamba install -p $NFS/conda_envs/lol-ai <pkg>` — never the base classic solver (it spins for hours).
+- pip deps: activate the env, then `python -m pip install ...` (with the exports above). torch / PyG wheels need their extra index URLs — copy from the doc's pip-pitfalls section.
+- After any material change, hand-update the curated `environment.yml` (science pins at major.minor; never paste a frozen export — they rot). Optionally refresh `environment.lock.yml` via `conda env export --no-builds` as a forensic record only.
+**OSC is separate** — never point OSC slurm scripts at this env name, and don't "fix" workstation scripts to use OSC module names.
