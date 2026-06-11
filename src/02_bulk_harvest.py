@@ -32,7 +32,7 @@ Context harvesting modes
 
 Usage
 -----
-    conda activate lol_shap_env
+    conda activate lol-ai
 
     # Normal harvest (no context)
     python src/02_bulk_harvest.py
@@ -56,6 +56,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import requests
 from riotwatcher import ApiError, LolWatcher
 
 from utils import (
@@ -232,7 +233,19 @@ def safe_api_call(fn, *args, current_key: str, **kwargs) -> tuple[Optional[any],
                 logger.error("Unhandled API Error %s: %s", status_code, err)
                 raise
 
-    logger.error("Failed after %d rate-limit retries.", max_retries)
+        except requests.exceptions.RequestException as err:
+            # Transport-level errors (ConnectionError, ChunkedEncodingError,
+            # timeouts) escape riotwatcher's ApiError; uncaught they kill the
+            # whole worker thread (killed all 3 region workers on 2026-06-08).
+            retries += 1
+            logger.warning(
+                "Transient network error (%s: %s); retry %d/%d in 15s.",
+                type(err).__name__, err, retries, max_retries,
+            )
+            time.sleep(15)
+            continue
+
+    logger.error("Failed after %d retries.", max_retries)
     return None, current_key
 
 
