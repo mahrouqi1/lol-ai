@@ -82,7 +82,7 @@ MATCHES_PER_SUMMONER = 100
 APEX_ENDPOINTS = {
     "CHALLENGER":  "challenger_by_queue",
     "GRANDMASTER": "grandmaster_by_queue",
-    "MASTER":      "master_by_queue",
+    "MASTER":      "masters_by_queue",
 }
 STANDARD_TIERS = ["DIAMOND", "EMERALD", "PLATINUM", "GOLD", "SILVER", "BRONZE", "IRON"]
 DIVISIONS = ["I", "II", "III", "IV"]
