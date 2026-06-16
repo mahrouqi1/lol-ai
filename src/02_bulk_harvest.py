@@ -135,6 +135,12 @@ _SEEN_CTX_PLAYERS: set[str] = set()
 # Records each game's source tier (approx game elo) for a downstream rank feature.
 _TIER_TAG_LOCK = threading.Lock()
 
+# Per-(region, tier) count of games we hold, used to enforce an equal game quota
+# across the standard tiers (DIAMOND..IRON) instead of an equal *player* count
+# (which yields wildly different game counts after dedup). Seeded from disk at
+# startup so the quota is resumable across restarts. Guarded by _TIER_TAG_LOCK.
+_TIER_GAME_COUNTS: dict[tuple[str, str], int] = {}
+
 
 # ── Initialization ────────────────────────────────────────────────────────────
 
@@ -163,6 +169,30 @@ def init_seen_caches() -> None:
         len(_SEEN_MATCHES), len(_SEEN_CTX) - len(_SEEN_MATCHES),
         len(_SEEN_PLAYERS), len(_SEEN_CTX_PLAYERS),
     )
+
+
+def init_tier_counts() -> None:
+    """Seed per-(region, tier) game counts from game_source_tier.csv so the
+    quota means 'total games held for this tier', resumable across restarts."""
+    if not GAME_TIER_FILE.exists():
+        return
+    n = 0
+    with open(GAME_TIER_FILE, encoding="utf-8") as f:
+        for line in f:
+            parts = line.strip().split(",")
+            if len(parts) != 2 or not parts[0]:
+                continue
+            gid, tier = parts
+            key = (_region_of(gid), tier)
+            _TIER_GAME_COUNTS[key] = _TIER_GAME_COUNTS.get(key, 0) + 1
+            n += 1
+    if _TIER_GAME_COUNTS:
+        summary = ", ".join(
+            f"{t}:{sum(c for (r, tt), c in _TIER_GAME_COUNTS.items() if tt == t)}"
+            for t in ALL_TIERS
+            if any(tt == t for (_r, tt) in _TIER_GAME_COUNTS)
+        )
+        logger.info("Tier counts seeded from %d tagged games: %s", n, summary)
 
 
 # ── API Key management ────────────────────────────────────────────────────────
@@ -322,11 +352,25 @@ def _mark_ctx_done(puuid: str) -> None:
         _SEEN_CTX_PLAYERS.add(puuid)
 
 
+def _region_of(game_id: str) -> str:
+    """Region prefix of a match id, e.g. 'EUW1_123' -> 'euw1'."""
+    return game_id.split("_", 1)[0].lower()
+
+
 def _tag_game_tier(game_id: str, tier: str) -> None:
-    """Append (game_id, source_tier) — approximate game elo for a rank feature."""
+    """Append (game_id, source_tier) — approximate game elo for a rank feature —
+    and bump the in-memory per-(region, tier) game count for quota enforcement."""
     with _TIER_TAG_LOCK:
         with open(GAME_TIER_FILE, "a", encoding="utf-8") as f:
             f.write(f"{game_id},{tier}\n")
+        key = (_region_of(game_id), tier)
+        _TIER_GAME_COUNTS[key] = _TIER_GAME_COUNTS.get(key, 0) + 1
+
+
+def tier_game_count(region: str, tier: str) -> int:
+    """Games held for one (region, tier). Used to decide when a tier's quota is met."""
+    with _TIER_TAG_LOCK:
+        return _TIER_GAME_COUNTS.get((region.lower(), tier), 0)
 
 
 def fetch_tier_puuids(watcher, region: str, tier: str, current_key: str, cap: int) -> tuple[list[str], str]:
@@ -426,14 +470,79 @@ def harvest_player(watcher, region, continent, puuid, tier, context_depth, curre
     return current_key
 
 
+def harvest_standard_tier_quota(watcher, region, continent, tier,
+                                context_depth, quota, current_key):
+    """Page through a standard tier's divisions, harvesting players until this
+    region holds `quota` games for the tier (or the tier is exhausted).
+
+    Interleaves player enumeration with harvesting so we stop the moment the
+    quota is met — no need to enumerate every player in the tier up front, and
+    every tier gets a comparable *game* count rather than a comparable *player*
+    count (which dedups to wildly uneven game counts)."""
+    logger.info("[%s] %s: target %d games (have %d).",
+                region, tier, quota, tier_game_count(region, tier))
+
+    for div in DIVISIONS:
+        page = 1
+        while tier_game_count(region, tier) < quota:
+            entries, current_key = safe_api_call(
+                watcher.league.entries, region, "RANKED_SOLO_5x5", tier, div,
+                page=page, current_key=current_key,
+            )
+            if getattr(watcher._base_api, "_api_key", None) != current_key:
+                watcher = LolWatcher(current_key)
+            if not entries:
+                break  # no more players in this division
+
+            puuids = [e["puuid"] for e in entries if e.get("puuid")]
+            random.shuffle(puuids)
+            for puuid in puuids:
+                if tier_game_count(region, tier) >= quota:
+                    break
+                latest_key = get_current_api_key()
+                if current_key != latest_key:
+                    current_key = latest_key
+                if getattr(watcher._base_api, "_api_key", None) != current_key:
+                    watcher = LolWatcher(current_key)
+                current_key = harvest_player(
+                    watcher, region, continent, puuid, tier, context_depth, current_key,
+                )
+            page += 1
+
+        if tier_game_count(region, tier) >= quota:
+            break
+
+    logger.info("[%s] %s: done, %d games held.", region, tier, tier_game_count(region, tier))
+    return current_key
+
+
 def worker_thread(region: str, continent: str, context_depth: int,
-                  tiers: list[str], players_per_tier: int) -> None:
-    """Harvest games for one region across the requested tiers (low->high elo)."""
+                  tiers: list[str], players_per_tier: int,
+                  games_per_tier: int = 0) -> None:
+    """Harvest games for one region across the requested tiers.
+
+    For standard tiers (DIAMOND..IRON) with a per-region `games_per_tier` quota,
+    harvest until the game quota is met (equal games per tier). Apex tiers and
+    quota=0 fall back to the player-capped behavior."""
     threading.current_thread().name = f"Worker-{region.upper()}"
     current_key = get_current_api_key()
     watcher = LolWatcher(current_key)
 
     for tier in tiers:
+        quota = games_per_tier if (games_per_tier and tier in STANDARD_TIERS) else 0
+
+        if quota and tier_game_count(region, tier) >= quota:
+            logger.info("[%s] %s: already at quota (%d >= %d); skipping.",
+                        region, tier, tier_game_count(region, tier), quota)
+            continue
+
+        if quota:
+            current_key = harvest_standard_tier_quota(
+                watcher, region, continent, tier, context_depth, quota, current_key)
+            if getattr(watcher._base_api, "_api_key", None) != current_key:
+                watcher = LolWatcher(current_key)
+            continue
+
         puuids, current_key = fetch_tier_puuids(watcher, region, tier, current_key, players_per_tier)
         if current_key != watcher._base_api._api_key:
             watcher = LolWatcher(current_key)
@@ -496,7 +605,12 @@ def parse_args() -> argparse.Namespace:
                    help="'all' or comma list: CHALLENGER,GRANDMASTER,MASTER,DIAMOND,EMERALD,"
                         "PLATINUM,GOLD,SILVER,BRONZE,IRON")
     p.add_argument("--players-per-tier", type=int, default=DEFAULT_PLAYERS_PER_TIER,
-                   help="Cap players sampled per tier per region (balance across elos)")
+                   help="Cap players sampled per tier per region (used for apex tiers "
+                        "and when --games-per-tier is 0)")
+    p.add_argument("--games-per-tier", type=int, default=0,
+                   help="Target TOTAL games (across all regions) for EACH standard tier "
+                        "DIAMOND..IRON; harvest each until met, then move on. Gives equal "
+                        "games per tier instead of equal players. 0=unlimited (default).")
     return p.parse_args()
 
 
@@ -509,6 +623,11 @@ def main() -> None:
     _SHARED_API_KEY = load_api_key()
 
     init_seen_caches()
+    init_tier_counts()
+
+    # The quota is specified as a TOTAL across regions; each region worker targets
+    # an equal share so per-tier totals come out roughly balanced AND region-balanced.
+    per_region_quota = -(-args.games_per_tier // len(REGION_MAP)) if args.games_per_tier else 0
 
     # Resolve effective context depth for context-pass mode
     effective_depth = args.context_depth
@@ -526,10 +645,17 @@ def main() -> None:
         if bad:
             logger.error("Unknown tiers: %s. Valid: %s", bad, ALL_TIERS); sys.exit(1)
         logger.info("Starting Bulk Harvester (context_depth=%d)...", effective_depth)
-        logger.info("Regions: %s | Tiers: %s | cap/tier: %d",
-                    list(REGION_MAP.keys()), tiers, args.players_per_tier)
+        if per_region_quota:
+            logger.info("Regions: %s | Tiers: %s | games/tier: %d total (%d/region for "
+                        "DIAMOND..IRON) | apex cap/tier: %d players",
+                        list(REGION_MAP.keys()), tiers, args.games_per_tier,
+                        per_region_quota, args.players_per_tier)
+        else:
+            logger.info("Regions: %s | Tiers: %s | cap/tier: %d players",
+                        list(REGION_MAP.keys()), tiers, args.players_per_tier)
         mode_fn = lambda region, continent: worker_thread(
-            region, continent, effective_depth, tiers, args.players_per_tier)
+            region, continent, effective_depth, tiers, args.players_per_tier,
+            per_region_quota)
 
     threads = []
     for region, continent in REGION_MAP.items():
