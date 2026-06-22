@@ -49,6 +49,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import random
 import sys
 import threading
@@ -76,6 +77,12 @@ REGION_MAP = {
 }
 
 MATCHES_PER_SUMMONER = 100
+
+# Request timeout (seconds). Without it, a half-open/hung connection never raises
+# and blocks a worker thread FOREVER — the silent stall that killed past runs
+# (06-17 and 06-22). With it, a hang raises requests.Timeout, which safe_api_call
+# already catches and retries/skips.
+API_TIMEOUT = 20
 
 # Tiers. Apex tiers use dedicated league endpoints; standard tiers paginate via
 # league.entries(region, queue, tier, division, page). ALL entries include puuid.
@@ -144,30 +151,41 @@ _TIER_GAME_COUNTS: dict[tuple[str, str], int] = {}
 
 # ── Initialization ────────────────────────────────────────────────────────────
 
+def _scan_ids(directory: Path, prefix: str, suffix: str) -> set[str]:
+    """Collect the id between `prefix` and `suffix` for every matching file in
+    `directory`. Uses os.scandir + string slicing — no per-file Path object or
+    fnmatch regex — which is dramatically faster than pathlib.glob over the
+    hundreds-of-thousands of files here (glob took ~90 min; this is minutes)."""
+    out: set[str] = set()
+    plen, slen = len(prefix), len(suffix)
+    try:
+        with os.scandir(directory) as it:
+            for e in it:
+                n = e.name
+                if n.startswith(prefix) and n.endswith(suffix):
+                    out.add(n[plen:-slen])
+    except FileNotFoundError:
+        pass
+    return out
+
+
 def init_seen_caches() -> None:
-    """Populate all in-memory seen sets from what's on disk."""
-    logger.info("Initializing seen caches from disk...")
+    """Populate all in-memory seen sets from what's on disk (fast scandir)."""
+    logger.info("Initializing seen caches from disk (scandir)...")
+    t0 = time.time()
 
-    for f in MATCH_DIR.glob("match_*.json"):
-        _SEEN_MATCHES.add(f.stem.replace("match_", ""))
-
-    for f in CTX_MATCH_DIR.glob("match_*.json"):
-        _SEEN_CTX.add(f.stem.replace("match_", ""))
+    _SEEN_MATCHES.update(_scan_ids(MATCH_DIR, "match_", ".json"))
+    _SEEN_CTX.update(_scan_ids(CTX_MATCH_DIR, "match_", ".json"))
     # Main matches also count as "seen context" so we don't re-fetch them
     _SEEN_CTX.update(_SEEN_MATCHES)
-
-    for f in PLAYER_DIR.glob("player_*.json"):
-        _SEEN_PLAYERS.add(f.stem.replace("player_", ""))
-
-    # A PUUID whose context directory contains at least one file is considered done.
-    # We track this with a sentinel file: context_matches/ctx_done_{puuid}.flag
-    for f in CTX_MATCH_DIR.glob("ctx_done_*.flag"):
-        _SEEN_CTX_PLAYERS.add(f.stem.replace("ctx_done_", ""))
+    _SEEN_PLAYERS.update(_scan_ids(PLAYER_DIR, "player_", ".json"))
+    # A PUUID whose context dir has a sentinel ctx_done_{puuid}.flag is done.
+    _SEEN_CTX_PLAYERS.update(_scan_ids(CTX_MATCH_DIR, "ctx_done_", ".flag"))
 
     logger.info(
-        "Caches: %d main matches, %d context matches, %d players, %d ctx-done players",
+        "Caches: %d main matches, %d context matches, %d players, %d ctx-done players (%.0fs)",
         len(_SEEN_MATCHES), len(_SEEN_CTX) - len(_SEEN_MATCHES),
-        len(_SEEN_PLAYERS), len(_SEEN_CTX_PLAYERS),
+        len(_SEEN_PLAYERS), len(_SEEN_CTX_PLAYERS), time.time() - t0,
     )
 
 
@@ -196,6 +214,13 @@ def init_tier_counts() -> None:
 
 
 # ── API Key management ────────────────────────────────────────────────────────
+
+def make_watcher(api_key: str) -> LolWatcher:
+    """LolWatcher with a request timeout, so a hung connection raises
+    requests.Timeout (handled by safe_api_call's retry) instead of blocking a
+    worker thread forever. Use this everywhere instead of LolWatcher() directly."""
+    return LolWatcher(api_key, timeout=API_TIMEOUT)
+
 
 def get_current_api_key() -> str:
     with _API_KEY_LOCK:
@@ -490,7 +515,7 @@ def harvest_standard_tier_quota(watcher, region, continent, tier,
                 page=page, current_key=current_key,
             )
             if getattr(watcher._base_api, "_api_key", None) != current_key:
-                watcher = LolWatcher(current_key)
+                watcher = make_watcher(current_key)
             if not entries:
                 break  # no more players in this division
 
@@ -503,7 +528,7 @@ def harvest_standard_tier_quota(watcher, region, continent, tier,
                 if current_key != latest_key:
                     current_key = latest_key
                 if getattr(watcher._base_api, "_api_key", None) != current_key:
-                    watcher = LolWatcher(current_key)
+                    watcher = make_watcher(current_key)
                 current_key = harvest_player(
                     watcher, region, continent, puuid, tier, context_depth, current_key,
                 )
@@ -526,7 +551,7 @@ def worker_thread(region: str, continent: str, context_depth: int,
     quota=0 fall back to the player-capped behavior."""
     threading.current_thread().name = f"Worker-{region.upper()}"
     current_key = get_current_api_key()
-    watcher = LolWatcher(current_key)
+    watcher = make_watcher(current_key)
 
     for tier in tiers:
         quota = games_per_tier if (games_per_tier and tier in STANDARD_TIERS) else 0
@@ -540,17 +565,17 @@ def worker_thread(region: str, continent: str, context_depth: int,
             current_key = harvest_standard_tier_quota(
                 watcher, region, continent, tier, context_depth, quota, current_key)
             if getattr(watcher._base_api, "_api_key", None) != current_key:
-                watcher = LolWatcher(current_key)
+                watcher = make_watcher(current_key)
             continue
 
         puuids, current_key = fetch_tier_puuids(watcher, region, tier, current_key, players_per_tier)
         if current_key != watcher._base_api._api_key:
-            watcher = LolWatcher(current_key)
+            watcher = make_watcher(current_key)
         for puuid in puuids:
             latest_key = get_current_api_key()
             if current_key != latest_key:
                 current_key = latest_key
-                watcher = LolWatcher(current_key)
+                watcher = make_watcher(current_key)
             current_key = harvest_player(
                 watcher, region, continent, puuid, tier, context_depth, current_key
             )
@@ -564,7 +589,7 @@ def context_pass_worker(region: str, continent: str, context_depth: int) -> None
     threading.current_thread().name = f"CtxWorker-{region.upper()}"
 
     current_key = get_current_api_key()
-    watcher = LolWatcher(current_key)
+    watcher = make_watcher(current_key)
 
     # Get the list of all known players at startup
     with _SEEN_PLAYERS_LOCK:
@@ -584,7 +609,7 @@ def context_pass_worker(region: str, continent: str, context_depth: int) -> None
         latest_key = get_current_api_key()
         if current_key != latest_key:
             current_key = latest_key
-            watcher = LolWatcher(current_key)
+            watcher = make_watcher(current_key)
 
         current_key = fetch_context_games(
             watcher, continent, region, puuid, context_depth, current_key,
