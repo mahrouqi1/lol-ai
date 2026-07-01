@@ -1,4 +1,4 @@
-# lol-shap brief
+# lol-ai brief
 
 **Scope:** Per-game, per-player *win-contribution* in League of Legends via
 **exact counterfactual Shapley** — players (not game-state features) as coalition
@@ -44,11 +44,11 @@ reuses models already trained. Do this on the workstation before building the GN
 
 ## Environment & commands (local workstation — for dev/smoke only)
 - This workstation: Linux, **2× RTX 4090 (24 GB each)**, conda env
-  `lol_shap_env` at `/home/almahrouqi.1/anaconda3/envs/lol_shap_env`.
+  `lol-ai` at `/research/nfs_shafieezadeh_1/mahrouqi.1/conda_envs/lol-ai` (renamed from `lol_shap_env`, moved off /home 2026-06-10).
 - Note: `environment.yml` pins **CPU** torch; verify GPU torch is actually
   installed in the env (`python -c "import torch; print(torch.cuda.is_available())"`)
   before training — reinstall the cu121/cu124 wheel if it returns False.
-- Run: `conda activate lol_shap_env && python src/<script>.py`
+- Run: `conda activate lol-ai && python src/<script>.py`
 - Riot API key lives in `.env` (`RIOT_API_KEY=`); dev keys expire every 24 h.
 
 ## Always confirm before doing
@@ -78,6 +78,8 @@ reuses models already trained. Do this on the workstation before building the GN
 
 ## Imports (paths resolved via .framework symlink in this project)
 @.framework/_docs/cross-project-learnings.md
+@.framework/_lib/conventions/structure.md      <!-- always: repo layout rules (D1-D7) -->
+@.framework/_lib/conventions/self-review.md    <!-- always: ultracode/autonomous self-review rule -->
 @.framework/_lib/conventions/python.md
 @.framework/_lib/conventions/git.md
 @.framework/_lib/conventions/ml.md

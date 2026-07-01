@@ -10,6 +10,9 @@ models/
 # ── Reports / plots ──
 reports/
 
+# ── Lit-review PDFs (large + copyrighted; /research skill cache) ──
+literature/
+
 # ── Python ──
 __pycache__/
 *.pyc
@@ -44,4 +47,31 @@ data/
 results/
 *.pt
 *.pth
+.smoke/
+
+# claude-code framework
+.claude/settings.local.json
+.claude/cmd-log.txt
+.claude/aggressive-*.log
+.claude/aggressive-*.plan.txt
+.claude/skills/
+.claude/worktrees/
+.claude/.nfs*
+.claude/scheduled_tasks.lock
+HANDOFF.md
+_artifacts/
+.olauth
+
+# heavy / generated outputs — never tracked (flood git + VSCode).
+# results/ is TRACKED (markdown report + figures progress surface).
+/experiments/
+/logs/
+/data/
+/tracks/*/logs/
+/tracks/*/experiments/
+/literature/**
+!/literature/manifest.json
+*.pt
+*.pth
+*.pkl
 .smoke/
