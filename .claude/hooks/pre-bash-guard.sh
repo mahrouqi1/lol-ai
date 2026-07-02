@@ -43,10 +43,10 @@ deny_patterns=(
   '\bgit clean -fx?d?\b'             # git clean -f, -fd, -fx, -fxd
   '(^|[;&|]|env [A-Z_]+=[^ ]* )\s*sbatch\b'  # sbatch INVOCATION (cmd position) — not a token mentioned inside an echo string
   '\bssh\b[^|]*sbatch\b'             # sbatch over ssh (incl. quoted remote cmd: ssh osc.edu "sbatch ...")
-  'find [^|]* -delete'               # find -delete (rm-rf evasion)
-  'shutil\.rmtree'                   # python rm-rf evasion
-  'os\.system\(.*[\x27"]rm '         # python rm evasion via os.system
-  'subprocess\.[a-z]+\(.*[\x27"]rm ' # subprocess rm evasion
+  '(^|[;&|]|env [A-Z_]+=[^ ]* )\s*find [^|]* -delete'  # find -delete INVOCATION (cmd position) — not a token mentioned in prose
+  'python[0-9.]*\b[^|]*-c\b[^|]*shutil\.rmtree'        # python -c rmtree INVOCATION (rm-rf evasion) — not a prose mention
+  'python[0-9.]*\b[^|]*-c\b[^|]*os\.system\(.*[\x27"]rm '   # python -c os.system rm evasion
+  'python[0-9.]*\b[^|]*-c\b[^|]*subprocess\.[a-z]+\(.*[\x27"]rm '  # python -c subprocess rm evasion
 )
 
 for pat in "${deny_patterns[@]}"; do
